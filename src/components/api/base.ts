@@ -1,5 +1,4 @@
 const API_BASEURL = import.meta.env.VITE_API_BASEURL ?? "";
-
 class ApiClient {
   private baseUrl: string;
 
@@ -50,6 +49,32 @@ class ApiClient {
 
   delete<T>(path: string): Promise<T> {
     return this.request<T>(path, { method: "DELETE" });
+  }
+
+  /**
+   * Subscribe to Server-Sent Events (SSE).
+   * Caller must close the EventSource when no longer needed.
+   */
+  sse<T>(path: string, onMessage: (data: T) => void, onError?: (err: any) => void): EventSource {
+    const es = new EventSource(`${this.baseUrl}${path}`);
+
+    es.onmessage = (e) => {
+      try {
+        onMessage(JSON.parse(e.data) as T);
+      } catch (err) {
+        console.error("Failed to parse SSE payload:", e);
+      }
+    };
+
+    es.onerror = (err) => {
+      if (onError) {
+        onError(err);
+      } else {
+        console.error("SSE error:", err);
+      }
+    };
+
+    return es;
   }
 }
 

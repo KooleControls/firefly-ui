@@ -19,7 +19,7 @@ export function Leaderboard({ devices }: { devices: Guest[] }) {
           data={chartData}
           layout="vertical"
           barCategoryGap="10%"
-          margin={{ top: 0, right: 0, left: 40, bottom: 0 }}
+          margin={{ top: 0, right: 20, left: 40, bottom: 0 }}
         >
           <XAxis type="number" hide />
           <YAxis

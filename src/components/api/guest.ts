@@ -1,13 +1,13 @@
 import { baseApi } from "./base";
 
 export interface Guest {
-  mac: string; // formatted string "AA:BB:CC:DD:EE:FF"
-  lastMessageTime: string; // ISO timestamp
+  mac: string;
+  lastMessageTime: string;
   buttonPresses: number;
 }
 
 function decodeBase64MacToString(mac: string): string {
-  const binary = atob(mac); // base64 -> binary
+  const binary = atob(mac);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
@@ -30,11 +30,25 @@ export const guest = {
     }));
   },
 
-  async resetButtonPresses(mac: string): Promise<void> {
+  resetButtonPresses(mac: string): Promise<void> {
     return baseApi.put<void>(`/api/guests/${mac}/reset`);
   },
 
-  async delete(mac: string): Promise<void> {
+  delete(mac: string): Promise<void> {
     return baseApi.delete<void>(`/api/guests/${mac}`);
+  },
+
+  subscribe(onUpdate: (guests: Guest[]) => void): EventSource {
+    return baseApi.sse<{ mac: string; lastMessageTime: string; buttonPresses: number }[]>(
+      "/api/guests/events",
+      (raw) => {
+        const guests = raw.map(g => ({
+          mac: decodeBase64MacToString(g.mac),
+          lastMessageTime: g.lastMessageTime,
+          buttonPresses: g.buttonPresses,
+        }));
+        onUpdate(guests);
+      }
+    );
   },
 };
