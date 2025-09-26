@@ -4,8 +4,10 @@ import { AppSidebar } from "./components/sidebar/app-sidebar"
 import { AppHeader } from "./components/sidebar/app-header"
 import { AppSidebarItem } from "./components/sidebar/sidebar-item"
 import { ThemeProvider } from "./components/theme/theme-provider"
-import HomePage from "./pages/HomePage"
 import { Toaster } from "sonner"
+import HomePage from "./pages/HomePage"
+import LogPage from "./pages/LogPage"
+
 
 
 function App() {
@@ -24,12 +26,16 @@ function App() {
       >
         <AppSidebar currentPath={path} variant="inset">
           <AppSidebarItem to="/" title="Home" currentPath={path} />
+          <AppSidebarItem to="/logs" title="Logs" currentPath={path} />
+
         </AppSidebar>
         <SidebarInset>
           <AppHeader />
           <div className="flex flex-col flex-1 min-h-0">
             <Routes>
               <Route path="/" element={<HomePage />} />
+              <Route path="/logs" element={<LogPage />} />
+
             </Routes>
             <Toaster />
           </div>
@@ -40,3 +46,4 @@ function App() {
 }
 
 export default App
+
