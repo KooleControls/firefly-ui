@@ -1088,8 +1088,8 @@
             dino.mac = mac; // Store MAC for reference
             dino.name = name || mac; // Store name if provided
             // State properties (crashed, respawning, jumping, ducking) are managed by state machine
-            // Start dino in waiting state - state machine will sync all properties
-            dino.update(0, Trex.status.WAITING);
+            // Start dino in respawning blinking state - state machine will sync all properties
+            dino.update(0, Trex.status.RESPAWNING_BLINKING);
             this.tRexes.push(dino);
             this.playerMap[mac] = dino;
             this.lastButtonPresses[mac] = 0;

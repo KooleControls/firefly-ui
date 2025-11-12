@@ -30,7 +30,7 @@
         this.msPerFrame = 1000 / FPS;
         this.config = Trex.config;
         // Current status (synced from state machine)
-        this.status = Trex.status.WAITING;
+        this.status = Trex.status.RESPAWNING_BLINKING;
 
         this.jumping = false;
         this.ducking = false;
@@ -52,8 +52,14 @@
         var gameMode = opt_gameMode || DinoGameMode.COLLECTIVE;
         Logger.info('TREX', 'Creating dino with game mode: ' + gameMode);
         this.stateMachine = new DinoStateMachine(gameMode, this);
-        Logger.debug('TREX', 'State machine created, transitioning to WAITING');
-        this.stateMachine.transition(DinoState.WAITING);
+        
+        // Initialize ground position before state transition (needed for RESPAWNING_BLINKING entry handler)
+        this.groundYPos = window.Runner.defaultDimensions.HEIGHT - this.config.HEIGHT -
+            window.Runner.config.BOTTOM_PAD;
+        this.minJumpHeight = this.groundYPos - this.config.MIN_JUMP_HEIGHT;
+        
+        Logger.debug('TREX', 'State machine created, transitioning to RESPAWNING_BLINKING');
+        this.stateMachine.transition(DinoState.RESPAWNING_BLINKING);
         Logger.debug('TREX', 'Dino initialized. State machine state: ' + this.stateMachine.getState());
 
         this.init();
@@ -158,13 +164,23 @@
          * Sets the t-rex to blink at random intervals.
          */
         init: function () {
-            this.groundYPos = window.Runner.defaultDimensions.HEIGHT - this.config.HEIGHT -
-                window.Runner.config.BOTTOM_PAD;
-            // Position will be set by state machine entry handler when transitioning to WAITING
-            this.minJumpHeight = this.groundYPos - this.config.MIN_JUMP_HEIGHT;
+            // groundYPos is already set in constructor before state transition
+            // Only set if not already set (for backward compatibility)
+            if (this.groundYPos === undefined || this.groundYPos === null) {
+                this.groundYPos = window.Runner.defaultDimensions.HEIGHT - this.config.HEIGHT -
+                    window.Runner.config.BOTTOM_PAD;
+                this.minJumpHeight = this.groundYPos - this.config.MIN_JUMP_HEIGHT;
+            }
 
             this.draw(0, 0);
-            this.update(0, Trex.status.WAITING);
+            // Don't update state here - it's already set to RESPAWNING_BLINKING in constructor
+            // But ensure position is set if it wasn't set by entry handler
+            if (this.status === Trex.status.RESPAWNING_BLINKING && 
+                (this.yPos === undefined || this.yPos === null || this.yPos === 0)) {
+                // Position dino above ground if not already positioned
+                var floatHeight = 50;
+                this.yPos = this.groundYPos - floatHeight;
+            }
         },
 
         /**

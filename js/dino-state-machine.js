@@ -36,7 +36,7 @@
     function DinoStateMachine(gameMode, dinoInstance) {
         this.gameMode = gameMode || GameMode.COLLECTIVE;
         this.dino = dinoInstance;
-        this.currentState = DinoState.WAITING;
+        this.currentState = DinoState.RESPAWNING_BLINKING;
         this.previousState = null;
         this.stateHistory = [];
         this.listeners = {};
@@ -600,8 +600,11 @@
             // RESPAWNING_BLINKING: Position dino above ground and reset xPos
             this.entryHandlers[DinoState.RESPAWNING_BLINKING] = function(newState, oldState, data) {
                 if (!self.dino) return;
-                var floatHeight = 50; // Pixels above ground
-                self.dino.yPos = self.dino.groundYPos - floatHeight;
+                // Only set position if groundYPos is initialized
+                if (self.dino.groundYPos !== undefined && self.dino.groundYPos !== null) {
+                    var floatHeight = 50; // Pixels above ground
+                    self.dino.yPos = self.dino.groundYPos - floatHeight;
+                }
                 self.dino.jumpVelocity = 0; // Keep it floating
                 // Reset xPos to original position (or START_X_POS as fallback)
                 if (self.dino.originalXPos !== undefined) {
