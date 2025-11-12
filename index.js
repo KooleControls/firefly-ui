@@ -30,7 +30,13 @@
         this.canvas = null;
         this.canvasCtx = null;
 
-        this.tRex = null;
+        this.tRex = null; // Keep for backward compatibility
+        this.tRexes = []; // Array of dinos for multiplayer
+        this.playerMap = {}; // Map MAC addresses to dino instances
+        this.lastButtonPresses = {}; // Track last button press count per player
+        this.apiUrl = 'http://192.168.50.27/api/guests/events';
+        this.eventSource = null; // For streaming connection (EventSource)
+        this.fetchStreamReader = null; // For fetch-based streaming fallback
 
         this.distanceMeter = null;
         this.distanceRan = 0;
@@ -374,12 +380,12 @@
             this.horizon = new Horizon(this.canvas, this.spriteDef, this.dimensions,
                 this.config.GAP_COEFFICIENT);
 
-            // Distance meter
+            // Distance meter (only for high score display)
             this.distanceMeter = new DistanceMeter(this.canvas,
                 this.spriteDef.TEXT_SPRITE, this.dimensions.WIDTH);
 
-            // Draw t-rex
-            this.tRex = new Trex(this.canvas, this.spriteDef.TREX);
+            // Don't create initial dino - dinos will be created from API
+            this.tRex = null; // No initial dino
 
             this.outerContainerEl.appendChild(this.containerEl);
 
@@ -387,7 +393,19 @@
                 this.createTouchController();
             }
 
+            // Auto-start the game
+            this.loadSounds();
+            this.playing = true;
+            this.activated = true;
+            this.playingIntro = false;
+            
+            // Set container to full width and height immediately (skip intro animation)
+            this.containerEl.style.width = this.dimensions.WIDTH + 'px';
+            this.containerEl.style.height = this.dimensions.HEIGHT + 'px';
+            this.setArcadeMode();
+
             this.startListening();
+            this.startApiPolling();
             this.update();
 
             window.addEventListener(Runner.events.RESIZE,
@@ -440,16 +458,21 @@
                 this.distanceMeter.calcXPos(this.dimensions.WIDTH);
                 this.clearCanvas();
                 this.horizon.update(0, 0, true);
-                this.tRex.update(0);
+                for (var i = 0; i < this.tRexes.length; i++) {
+                    this.tRexes[i].update(0);
+                }
 
                 // Outer container and distance meter.
                 if (this.playing || this.crashed || this.paused) {
                     this.containerEl.style.width = this.dimensions.WIDTH + 'px';
                     this.containerEl.style.height = this.dimensions.HEIGHT + 'px';
-                    this.distanceMeter.update(0, Math.ceil(this.distanceRan));
+                    // Only draw high score, not current score
+                    this.distanceMeter.drawHighScore();
                     this.stop();
                 } else {
-                    this.tRex.draw(0, 0);
+                    for (var i = 0; i < this.tRexes.length; i++) {
+                        this.tRexes[i].draw(0, 0);
+                    }
                 }
 
                 // Game over panel.
@@ -538,15 +561,26 @@
             if (this.playing) {
                 this.clearCanvas();
 
-                if (this.tRex.jumping) {
-                    this.tRex.updateJump(deltaTime);
+                // Update all dinos
+                for (var i = 0; i < this.tRexes.length; i++) {
+                    var dino = this.tRexes[i];
+                    if (dino.jumping) {
+                        dino.updateJump(deltaTime);
+                    }
                 }
 
                 this.runningTime += deltaTime;
                 var hasObstacles = this.runningTime > this.config.CLEAR_TIME;
 
-                // First jump triggers the intro.
-                if (this.tRex.jumpCount == 1 && !this.playingIntro) {
+                // First jump triggers the intro (check any dino).
+                var anyDinoJumped = false;
+                for (var i = 0; i < this.tRexes.length; i++) {
+                    if (this.tRexes[i].jumpCount == 1) {
+                        anyDinoJumped = true;
+                        break;
+                    }
+                }
+                if (anyDinoJumped && !this.playingIntro) {
                     this.playIntro();
                 }
 
@@ -559,12 +593,25 @@
                         this.inverted);
                 }
 
-                // Check for collisions.
-                var collision = hasObstacles &&
-                    checkForCollision(this.horizon.obstacles[0], this.tRex);
+                // Check for collisions with all dinos.
+                var collision = false;
+                if (hasObstacles && this.horizon.obstacles.length > 0) {
+                    for (var i = 0; i < this.tRexes.length; i++) {
+                        if (checkForCollision(this.horizon.obstacles[0], this.tRexes[i])) {
+                            collision = true;
+                            break;
+                        }
+                    }
+                }
 
                 if (!collision) {
-                    this.distanceRan += this.currentSpeed * deltaTime / this.msPerFrame;
+                    // Update distance for each dino
+                    var distanceIncrement = this.currentSpeed * deltaTime / this.msPerFrame;
+                    for (var i = 0; i < this.tRexes.length; i++) {
+                        if (this.tRexes[i].distanceRan !== undefined) {
+                            this.tRexes[i].distanceRan += distanceIncrement;
+                        }
+                    }
 
                     if (this.currentSpeed < this.config.MAX_SPEED) {
                         this.currentSpeed += this.config.ACCELERATION;
@@ -573,14 +620,29 @@
                     this.gameOver();
                 }
 
-                var playAchievementSound = this.distanceMeter.update(deltaTime,
-                    Math.ceil(this.distanceRan));
-
-                if (playAchievementSound) {
-                    this.playSound(this.soundFx.SCORE);
+                // Update high score only (no current score display)
+                // Check all dinos for new high score
+                var maxDistance = 0;
+                for (var i = 0; i < this.tRexes.length; i++) {
+                    if (this.tRexes[i].distanceRan > maxDistance) {
+                        maxDistance = this.tRexes[i].distanceRan;
+                    }
                 }
+                if (maxDistance > this.highestScore) {
+                    this.highestScore = Math.ceil(maxDistance);
+                    this.distanceMeter.setHighScore(this.highestScore);
+                }
+                // Only draw high score, not current score
+                this.distanceMeter.drawHighScore();
 
-                // Night mode.
+                // Night mode - use max distance from all dinos
+                var maxDistanceForNightMode = 0;
+                for (var i = 0; i < this.tRexes.length; i++) {
+                    if (this.tRexes[i].distanceRan > maxDistanceForNightMode) {
+                        maxDistanceForNightMode = this.tRexes[i].distanceRan;
+                    }
+                }
+                
                 if (this.invertTimer > this.config.INVERT_FADE_DURATION) {
                     this.invertTimer = 0;
                     this.invertTrigger = false;
@@ -589,7 +651,7 @@
                     this.invertTimer += deltaTime;
                 } else {
                     var actualDistance =
-                        this.distanceMeter.getActualDistance(Math.ceil(this.distanceRan));
+                        this.distanceMeter.getActualDistance(Math.ceil(maxDistanceForNightMode));
 
                     if (actualDistance > 0) {
                         this.invertTrigger = !(actualDistance %
@@ -601,11 +663,29 @@
                         }
                     }
                 }
+
+                // Draw scores above each dino
+                this.drawDinoScores();
             }
 
-            if (this.playing || (!this.activated &&
-                this.tRex.blinkCount < Runner.config.MAX_BLINK_COUNT)) {
-                this.tRex.update(deltaTime);
+            // Update all dinos
+            var shouldUpdate = false;
+            if (this.playing) {
+                shouldUpdate = true;
+            } else if (!this.activated) {
+                // Check if any dino should blink
+                for (var i = 0; i < this.tRexes.length; i++) {
+                    if (this.tRexes[i].blinkCount < Runner.config.MAX_BLINK_COUNT) {
+                        shouldUpdate = true;
+                        break;
+                    }
+                }
+            }
+
+            if (shouldUpdate) {
+                for (var i = 0; i < this.tRexes.length; i++) {
+                    this.tRexes[i].update(deltaTime);
+                }
                 this.scheduleNextUpdate();
             }
         },
@@ -668,6 +748,228 @@
         },
 
         /**
+         * Start streaming connection to the API for player data.
+         */
+        startApiPolling: function () {
+            var self = this;
+            
+            // Close existing connection if any
+            if (this.eventSource) {
+                this.eventSource.close();
+            }
+            
+            // Try EventSource first (Server-Sent Events)
+            try {
+                this.eventSource = new EventSource(this.apiUrl);
+                
+                this.eventSource.onmessage = function(event) {
+                    try {
+                        // Handle both direct JSON and stringified JSON
+                        var data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+                        if (Array.isArray(data)) {
+                            self.updatePlayers(data);
+                        }
+                    } catch (e) {
+                        console.error('Error parsing event data:', e, event.data);
+                    }
+                };
+                
+                // Also handle custom event types if the server uses them
+                this.eventSource.addEventListener('message', function(event) {
+                    try {
+                        var data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+                        if (Array.isArray(data)) {
+                            self.updatePlayers(data);
+                        }
+                    } catch (e) {
+                        console.error('Error parsing custom event data:', e);
+                    }
+                });
+                
+                this.eventSource.onerror = function(error) {
+                    console.error('EventSource error:', error);
+                    // Fallback to fetch stream if EventSource fails
+                    self.eventSource.close();
+                    self.startFetchStream();
+                };
+            } catch (e) {
+                // If EventSource not supported or fails, use fetch stream
+                console.log('EventSource not available, using fetch stream');
+                this.startFetchStream();
+            }
+        },
+
+        /**
+         * Start fetch-based streaming connection as fallback.
+         */
+        startFetchStream: function () {
+            var self = this;
+            var buffer = '';
+            
+            // Close existing stream if any
+            if (this.fetchStreamReader) {
+                this.fetchStreamReader.cancel();
+                this.fetchStreamReader = null;
+            }
+            
+            function readStream() {
+                if (!self.fetchStreamReader) {
+                    fetch(self.apiUrl)
+                        .then(function(response) {
+                            if (!response.ok) {
+                                throw new Error('Network response was not ok');
+                            }
+                            if (!response.body) {
+                                throw new Error('Streaming not supported');
+                            }
+                            self.fetchStreamReader = response.body.getReader();
+                            var reader = self.fetchStreamReader;
+                            var decoder = new TextDecoder();
+                            
+                            function pump() {
+                                return reader.read().then(function(result) {
+                                    if (result.done) {
+                                        // Stream ended, reconnect after a delay
+                                        self.fetchStreamReader = null;
+                                        setTimeout(function() {
+                                            self.startFetchStream();
+                                        }, 1000);
+                                        return;
+                                    }
+                                    
+                                    // Decode chunk and process
+                                    buffer += decoder.decode(result.value, { stream: true });
+                                    
+                                    // Try to parse complete JSON objects from buffer
+                                    // Handle both newline-separated JSON and continuous JSON
+                                    var lines = buffer.split('\n');
+                                    buffer = lines.pop() || ''; // Keep incomplete line in buffer
+                                    
+                                    for (var i = 0; i < lines.length; i++) {
+                                        var line = lines[i].trim();
+                                        if (line) {
+                                            try {
+                                                var data = JSON.parse(line);
+                                                if (Array.isArray(data)) {
+                                                    self.updatePlayers(data);
+                                                }
+                                            } catch (e) {
+                                                // Might be partial JSON, try to parse the whole buffer
+                                                try {
+                                                    var fullData = JSON.parse(buffer + line);
+                                                    if (Array.isArray(fullData)) {
+                                                        self.updatePlayers(fullData);
+                                                        buffer = '';
+                                                    }
+                                                } catch (e2) {
+                                                    // Still partial, keep in buffer
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Also try to parse the remaining buffer as complete JSON
+                                    if (buffer.trim()) {
+                                        try {
+                                            var completeData = JSON.parse(buffer.trim());
+                                            if (Array.isArray(completeData)) {
+                                                self.updatePlayers(completeData);
+                                                buffer = '';
+                                            }
+                                        } catch (e) {
+                                            // Still incomplete, keep in buffer
+                                        }
+                                    }
+                                    
+                                    return pump();
+                                }).catch(function(error) {
+                                    console.error('Stream read error:', error);
+                                    // Reconnect after error
+                                    self.fetchStreamReader = null;
+                                    setTimeout(function() {
+                                        self.startFetchStream();
+                                    }, 1000);
+                                });
+                            }
+                            
+                            return pump();
+                        })
+                        .catch(function(error) {
+                            console.error('Error starting fetch stream:', error);
+                            // Retry after delay
+                            setTimeout(function() {
+                                self.startFetchStream();
+                            }, 2000);
+                        });
+                }
+            }
+            
+            readStream();
+        },
+
+        /**
+         * Update players based on API data.
+         * @param {Array} players Array of player objects with mac and buttonPresses
+         */
+        updatePlayers: function (players) {
+            if (!Array.isArray(players)) {
+                return;
+            }
+
+            // Create or update dinos for each player
+            for (var i = 0; i < players.length; i++) {
+                var player = players[i];
+                var mac = player.mac;
+                var buttonPresses = player.buttonPresses || 0;
+
+                // Create dino if it doesn't exist
+                if (!this.playerMap[mac]) {
+                    var dino = new Trex(this.canvas, this.spriteDef.TREX);
+                    // All dinos start at the same x position (they share the track)
+                    // Small offset for visual distinction (optional - can be removed if you want them overlapping)
+                    dino.xPos = Trex.config.START_X_POS + (i * 2); // 2px offset per dino
+                    // Initialize score tracking for this dino
+                    dino.distanceRan = 0;
+                    dino.mac = mac; // Store MAC for reference
+                    // Start dino in running state
+                    dino.update(0, Trex.status.RUNNING);
+                    this.tRexes.push(dino);
+                    this.playerMap[mac] = dino;
+                    this.lastButtonPresses[mac] = buttonPresses;
+                }
+
+                // Check if button presses increased (button was pressed)
+                var lastPresses = this.lastButtonPresses[mac] || 0;
+                if (buttonPresses > lastPresses) {
+                    var dino = this.playerMap[mac];
+                    // Trigger jump if not already jumping
+                    if (dino && !dino.jumping && !dino.ducking) {
+                        if (this.soundFx && this.soundFx.BUTTON_PRESS) {
+                            this.playSound(this.soundFx.BUTTON_PRESS);
+                        }
+                        dino.startJump(this.currentSpeed);
+                    }
+                    this.lastButtonPresses[mac] = buttonPresses;
+                }
+            }
+
+            // Remove dinos for players that are no longer in the API response
+            var currentMacs = players.map(function(p) { return p.mac; });
+            for (var mac in this.playerMap) {
+                if (currentMacs.indexOf(mac) === -1) {
+                    // Remove dino from array
+                    var dino = this.playerMap[mac];
+                    var index = this.tRexes.indexOf(dino);
+                    if (index > -1) {
+                        this.tRexes.splice(index, 1);
+                    }
+                    delete this.playerMap[mac];
+                    delete this.lastButtonPresses[mac];
+                }
+            }
+        },
+
+        /**
          * Process keydown.
          * @param {Event} e
          */
@@ -678,22 +980,8 @@
             }
 
             if (e.target != this.detailsButton) {
-                if (!this.crashed && (Runner.keycodes.JUMP[e.keyCode] ||
-                    e.type == Runner.events.TOUCHSTART)) {
-                    if (!this.playing) {
-                        this.loadSounds();
-                        this.playing = true;
-                        this.update();
-                        if (window.errorPageController) {
-                            errorPageController.trackEasterEgg();
-                        }
-                    }
-                    //  Play sound effect and jump on starting the game for the first time.
-                    if (!this.tRex.jumping && !this.tRex.ducking) {
-                        this.playSound(this.soundFx.BUTTON_PRESS);
-                        this.tRex.startJump(this.currentSpeed);
-                    }
-                }
+                // Keyboard controls removed - game auto-starts and dinos controlled by API
+                // Only handle restart on crash
 
                 if (this.crashed && e.type == Runner.events.TOUCHSTART &&
                     e.currentTarget == this.containerEl) {
@@ -701,16 +989,7 @@
                 }
             }
 
-            if (this.playing && !this.crashed && Runner.keycodes.DUCK[e.keyCode]) {
-                e.preventDefault();
-                if (this.tRex.jumping) {
-                    // Speed drop, activated only when jump key is not pressed.
-                    this.tRex.setSpeedDrop();
-                } else if (!this.tRex.jumping && !this.tRex.ducking) {
-                    // Duck.
-                    this.tRex.setDuck(true);
-                }
-            }
+            // Duck controls removed - dinos controlled by API only
         },
 
 
@@ -720,16 +999,9 @@
          */
         onKeyUp: function (e) {
             var keyCode = String(e.keyCode);
-            var isjumpKey = Runner.keycodes.JUMP[keyCode] ||
-                e.type == Runner.events.TOUCHEND ||
-                e.type == Runner.events.MOUSEDOWN;
-
-            if (this.isRunning() && isjumpKey) {
-                this.tRex.endJump();
-            } else if (Runner.keycodes.DUCK[keyCode]) {
-                this.tRex.speedDrop = false;
-                this.tRex.setDuck(false);
-            } else if (this.crashed) {
+            
+            // Only handle restart on crash
+            if (this.crashed) {
                 // Check that enough time has elapsed before allowing jump key to restart.
                 var deltaTime = getTimeStamp() - this.time;
 
@@ -738,11 +1010,8 @@
                         Runner.keycodes.JUMP[keyCode])) {
                     this.restart();
                 }
-            } else if (this.paused && isjumpKey) {
-                // Reset the jump state
-                this.tRex.reset();
-                this.play();
             }
+            // All other keyboard controls removed - dinos controlled by API
         },
 
         /**
@@ -785,7 +1054,10 @@
             this.crashed = true;
             this.distanceMeter.acheivement = false;
 
-            this.tRex.update(100, Trex.status.CRASHED);
+            // Update all dinos to crashed state
+            for (var i = 0; i < this.tRexes.length; i++) {
+                this.tRexes[i].update(100, Trex.status.CRASHED);
+            }
 
             // Game over panel.
             if (!this.gameOverPanel) {
@@ -796,9 +1068,15 @@
                 this.gameOverPanel.draw();
             }
 
-            // Update the high score.
-            if (this.distanceRan > this.highestScore) {
-                this.highestScore = Math.ceil(this.distanceRan);
+            // Update the high score from all dinos.
+            var maxDistance = 0;
+            for (var i = 0; i < this.tRexes.length; i++) {
+                if (this.tRexes[i].distanceRan > maxDistance) {
+                    maxDistance = this.tRexes[i].distanceRan;
+                }
+            }
+            if (maxDistance > this.highestScore) {
+                this.highestScore = Math.ceil(maxDistance);
                 this.distanceMeter.setHighScore(this.highestScore);
             }
 
@@ -811,13 +1089,22 @@
             this.paused = true;
             cancelAnimationFrame(this.raqId);
             this.raqId = 0;
+            // Keep API streaming running so we can detect new players
+            // Only stop on page unload or game destruction
         },
 
         play: function () {
             if (!this.crashed) {
                 this.playing = true;
                 this.paused = false;
-                this.tRex.update(0, Trex.status.RUNNING);
+                // Restart API streaming if it was stopped
+                if (!this.eventSource && !this.fetchStreamReader) {
+                    this.startApiPolling();
+                }
+                // Update all dinos to running state
+                for (var i = 0; i < this.tRexes.length; i++) {
+                    this.tRexes[i].update(0, Trex.status.RUNNING);
+                }
                 this.time = getTimeStamp();
                 this.update();
             }
@@ -829,14 +1116,20 @@
                 this.runningTime = 0;
                 this.playing = true;
                 this.crashed = false;
-                this.distanceRan = 0;
+                // distanceRan removed - tracking per dino now
                 this.setSpeed(this.config.SPEED);
                 this.time = getTimeStamp();
                 this.containerEl.classList.remove(Runner.classes.CRASHED);
                 this.clearCanvas();
                 this.distanceMeter.reset(this.highestScore);
                 this.horizon.reset();
-                this.tRex.reset();
+                // Reset all dinos
+                for (var i = 0; i < this.tRexes.length; i++) {
+                    this.tRexes[i].reset();
+                    if (this.tRexes[i].distanceRan !== undefined) {
+                        this.tRexes[i].distanceRan = 0;
+                    }
+                }
                 this.playSound(this.soundFx.BUTTON_PRESS);
                 this.invert(true);
                 this.update();
@@ -895,6 +1188,32 @@
                 sourceNode.buffer = soundBuffer;
                 sourceNode.connect(this.audioContext.destination);
                 sourceNode.start(0);
+            }
+        },
+
+        /**
+         * Draw score above each dino.
+         */
+        drawDinoScores: function () {
+            for (var i = 0; i < this.tRexes.length; i++) {
+                var dino = this.tRexes[i];
+                if (dino.distanceRan !== undefined) {
+                    var score = Math.ceil(this.distanceMeter.getActualDistance(dino.distanceRan));
+                    var scoreText = score.toString();
+                    
+                    // Position score above the dino
+                    var scoreX = dino.xPos + (Trex.config.WIDTH / 2);
+                    var scoreY = dino.yPos - 15; // 15px above the dino
+                    
+                    // Draw score using canvas text
+                    this.canvasCtx.save();
+                    this.canvasCtx.font = '12px Arial';
+                    this.canvasCtx.fillStyle = '#535353';
+                    this.canvasCtx.textAlign = 'center';
+                    this.canvasCtx.textBaseline = 'bottom';
+                    this.canvasCtx.fillText(scoreText, scoreX, scoreY);
+                    this.canvasCtx.restore();
+                }
             }
         },
 
