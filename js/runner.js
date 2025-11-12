@@ -1618,34 +1618,48 @@
         },
 
         /**
-         * Draw score above each dino.
+         * Draw score and name above each dino.
          */
         drawDinoScores: function () {
             for (var i = 0; i < this.tRexes.length; i++) {
                 var dino = this.tRexes[i];
+
                 // Skip crashed dinos in competitive mode
                 if (this.gameMode === 'competitive' && dino.crashed) {
                     continue;
                 }
+
                 if (dino.distanceRan !== undefined) {
+                    // ✅ Define both nameText and scoreText here
                     var score = Math.ceil(this.distanceMeter.getActualDistance(dino.distanceRan));
                     var scoreText = score.toString();
-                    
-                    // Position score above the dino
-                    var scoreX = dino.xPos + (Trex.config.WIDTH / 2);
-                    var scoreY = dino.yPos - 15; // 15px above the dino
-                    
-                    // Draw score using canvas text
+
+                    // Fallback logic for name
+                    var nameText = (dino && dino.name) ? dino.name : (dino.mac || "Unknown");
+
+                    // Position text above the dino
+                    var centerX = dino.xPos + (Trex.config.WIDTH / 2);
+                    var baseY = dino.yPos - 15; // 15px above dino
+
                     this.canvasCtx.save();
-                    this.canvasCtx.font = '12px Arial';
-                    this.canvasCtx.fillStyle = '#535353';
                     this.canvasCtx.textAlign = 'center';
                     this.canvasCtx.textBaseline = 'bottom';
-                    this.canvasCtx.fillText(scoreText, scoreX, scoreY);
+
+                    // Draw name (top line)
+                    this.canvasCtx.font = 'bold 12px Arial';
+                    this.canvasCtx.fillStyle = '#222';
+                    this.canvasCtx.fillText(nameText, centerX, baseY - 12);
+
+                    // Draw score (below name)
+                    this.canvasCtx.font = '12px Arial';
+                    this.canvasCtx.fillStyle = '#555';
+                    this.canvasCtx.fillText(scoreText, centerX, baseY);
+
                     this.canvasCtx.restore();
                 }
             }
         },
+
 
         /**
          * Inverts the current page / canvas colors.
