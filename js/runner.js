@@ -50,6 +50,8 @@
         this.distanceRan = 0;
 
         this.highestScore = 0;
+        this.highScores = {}; // mac -> highest score
+
 
         this.time = 0;
         this.runningTime = 0;
@@ -587,7 +589,7 @@
                     this.distanceMeter.setHighScore(this.highestScore);
                 }
                 // Only draw high score, not current score
-                this.distanceMeter.drawHighScore();
+                //this.distanceMeter.drawHighScore();
 
                 // Night mode - use max distance from all dinos
                 var maxDistanceForNightMode = 0;
@@ -620,6 +622,7 @@
 
                 // Draw scores above each dino (only non-crashed ones)
                 this.drawDinoScores();
+                this.drawLeaderboard();
             } else if (this.waitingForModeSelection) {
                 // Keep updating to show mode selection screen
                 this.scheduleNextUpdate();
@@ -1700,34 +1703,103 @@
         },
 
         /**
-         * Draw score above each dino.
+         * Draw name and current score above each dino.
          */
         drawDinoScores: function () {
+            if (!this.highScores) this.highScores = {};
+
             for (var i = 0; i < this.tRexes.length; i++) {
                 var dino = this.tRexes[i];
+                if (!dino) continue;
+
                 // Skip crashed dinos in competitive mode
-                if (this.gameMode === 'competitive' && dino.crashed) {
-                    continue;
-                }
+                if (this.gameMode === 'competitive' && dino.crashed) continue;
+
                 if (dino.distanceRan !== undefined) {
                     var score = Math.ceil(this.distanceMeter.getActualDistance(dino.distanceRan));
-                    var scoreText = score.toString();
-                    
-                    // Position score above the dino
-                    var scoreX = dino.xPos + (Trex.config.WIDTH / 2);
-                    var scoreY = dino.yPos - 15; // 15px above the dino
-                    
-                    // Draw score using canvas text
+
+                    // Track highscore per MAC
+                    if (!this.highScores[dino.mac] || score > this.highScores[dino.mac]) {
+                        this.highScores[dino.mac] = score;
+                    }
+
+                    var nameText = dino.name || dino.mac || "Unknown";
+
+                    // Draw name + score above the dino
+                    var centerX = dino.xPos + (Trex.config.WIDTH / 2);
+                    var baseY = dino.yPos - 15;
+
                     this.canvasCtx.save();
-                    this.canvasCtx.font = '12px Arial';
-                    this.canvasCtx.fillStyle = '#535353';
                     this.canvasCtx.textAlign = 'center';
                     this.canvasCtx.textBaseline = 'bottom';
-                    this.canvasCtx.fillText(scoreText, scoreX, scoreY);
+
+                    // Draw name
+                    this.canvasCtx.font = 'bold 12px Arial';
+                    this.canvasCtx.fillStyle = '#222';
+                    this.canvasCtx.fillText(nameText, centerX, baseY - 12);
+
+                    // Draw current score
+                    this.canvasCtx.font = '12px Arial';
+                    this.canvasCtx.fillStyle = '#555';
+                    this.canvasCtx.fillText(score.toString(), centerX, baseY);
+
                     this.canvasCtx.restore();
                 }
             }
         },
+
+
+        /**
+         * Draw top 5 leaderboard with name + all-time highscore.
+         */
+        drawLeaderboard: function () {
+            if (!this.highScores) this.highScores = {};
+
+            // Collect players from tRexes
+            var players = [];
+            for (var i = 0; i < this.tRexes.length; i++) {
+                var dino = this.tRexes[i];
+                if (!dino) continue;
+
+                var mac = dino.mac;
+                var name = dino.name || mac || "Unknown";
+                var high = this.highScores[mac] || 0;
+
+                players.push({ mac: mac, name: name, high: high });
+            }
+
+            // Sort descending by all-time highscore and take top 5
+            players.sort((a, b) => b.high - a.high);
+            var top5 = players.slice(0, 5);
+
+            // Draw leaderboard on right
+            this.canvasCtx.save();
+            this.canvasCtx.textAlign = "right";
+            this.canvasCtx.textBaseline = "top";
+            this.canvasCtx.font = "bold 14px Arial";
+            this.canvasCtx.fillStyle = "#000";
+
+            var marginRight = 20;
+            var startX = this.dimensions.WIDTH - marginRight;
+            var startY = 20;
+
+            this.canvasCtx.fillText("🏆 TOP 5", startX, startY);
+
+            this.canvasCtx.font = "12px Arial";
+            for (var i = 0; i < top5.length; i++) {
+                var p = top5[i];
+                var line = (i + 1) + ". " + p.name + " - " + p.high;
+                this.canvasCtx.fillText(line, startX, startY + 20 + i * 16);
+            }
+
+            this.canvasCtx.restore();
+        },
+
+
+
+
+
+
 
         /**
          * Inverts the current page / canvas colors.
