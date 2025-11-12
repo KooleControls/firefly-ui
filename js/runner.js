@@ -1151,14 +1151,21 @@
                 });
             }
 
+            // Get current state BEFORE any transitions to prevent double-processing
+            var currentState = dino && dino.stateMachine ? dino.stateMachine.getState() : null;
+            
             // Debounce: prevent processing the same button press multiple times in quick succession
+            // BUT: Allow immediate transition from RESPAWNING_BLINKING to RESPAWNING_FALLING (intentional two-step process)
             var timeStampFn = (typeof getTimeStamp !== 'undefined') ? getTimeStamp : 
                              (window.getTimeStamp ? window.getTimeStamp : Date.now);
             var currentTime = timeStampFn();
             var lastButtonTime = dino.lastButtonTime || 0;
             var buttonDebounceTime = 100; // 100ms debounce to prevent duplicate processing
             
-            if (currentTime - lastButtonTime < buttonDebounceTime) {
+            // Skip debounce if transitioning from RESPAWNING_BLINKING to RESPAWNING_FALLING
+            var isRespawnBlinkingTransition = currentState === DinoState.RESPAWNING_BLINKING;
+            
+            if (!isRespawnBlinkingTransition && currentTime - lastButtonTime < buttonDebounceTime) {
                 console.log('[BUTTON_PRESS] Ignoring duplicate button press (debounced)', {
                     mac: mac,
                     timeSinceLastPress: currentTime - lastButtonTime,
@@ -1167,9 +1174,6 @@
                 return; // Ignore duplicate button press
             }
             dino.lastButtonTime = currentTime;
-
-            // Get current state BEFORE any transitions to prevent double-processing
-            var currentState = dino && dino.stateMachine ? dino.stateMachine.getState() : null;
             console.log('[BUTTON_PRESS] Current state at start of handler:', currentState, {
                 mac: mac,
                 xPos: dino ? dino.xPos : 'N/A',
@@ -1180,14 +1184,14 @@
 
             // If dino is crashed, transition to RESPAWNING_BLINKING on button press
             // Use state machine to check crashed state - check BEFORE transitioning
-            // Only allow respawn if at least 2 seconds have passed since crash
+            // Only allow respawn if at least 500ms have passed since crash
             if (dino && dino.stateMachine && currentState === DinoState.CRASHED) {
-                // Check if 2 seconds have passed since crash
+                // Check if 500ms have passed since crash
                 var timeStampFn = (typeof getTimeStamp !== 'undefined') ? getTimeStamp : 
                                  (window.getTimeStamp ? window.getTimeStamp : Date.now);
                 var currentTime = timeStampFn();
                 var timeSinceCrash = currentTime - (dino.crashTime || 0);
-                var minCrashDuration = 2000; // 2 seconds in milliseconds
+                var minCrashDuration = 500; // 500ms in milliseconds
                 
                 if (dino.crashTime === 0) {
                     // Crash time not set, allow respawn (backward compatibility)
@@ -1241,11 +1245,40 @@
 
             // If dino is blinking (waiting for fall), transition to falling state
             // Use state machine to check state - check BEFORE transitioning
+            // Only allow transition if at least 1 second has passed since entering RESPAWNING_BLINKING
             if (dino && dino.stateMachine && currentState === DinoState.RESPAWNING_BLINKING) {
+                // Check if 1 second has passed since respawn started
+                var timeStampFn = (typeof getTimeStamp !== 'undefined') ? getTimeStamp : 
+                                 (window.getTimeStamp ? window.getTimeStamp : Date.now);
+                var currentTime = timeStampFn();
+                var timeSinceRespawnStart = currentTime - (dino.respawnStartTime || 0);
+                var minRespawnBlinkDuration = 1000; // 1 second in milliseconds
+                
+                if (dino.respawnStartTime === 0 || timeSinceRespawnStart < minRespawnBlinkDuration) {
+                    // Not enough time has passed since respawn started
+                    var remainingTime = minRespawnBlinkDuration - timeSinceRespawnStart;
+                    console.log('[BUTTON_PRESS] Button press during RESPAWNING_BLINKING - but only ' + Math.round(timeSinceRespawnStart) + 'ms have passed. Need ' + minRespawnBlinkDuration + 'ms. Waiting ' + Math.round(remainingTime) + 'ms more.', {
+                        mac: mac,
+                        status: dino.status,
+                        stateMachineState: currentState,
+                        timeSinceRespawnStart: timeSinceRespawnStart,
+                        respawnStartTime: dino.respawnStartTime,
+                        currentTime: currentTime,
+                        timestamp: new Date().toISOString()
+                    });
+                    Logger.info('BUTTON_PRESS', 'Button press during respawn blinking - but not enough time has passed', {
+                        mac: mac,
+                        timeSinceRespawnStart: timeSinceRespawnStart,
+                        minRespawnBlinkDuration: minRespawnBlinkDuration
+                    });
+                    return; // Don't allow transition yet
+                }
+                
                 console.log('[BUTTON_PRESS] Button press received during RESPAWNING_BLINKING state - transitioning to RESPAWNING_FALLING', {
                     mac: mac,
                     status: dino.status,
                     stateMachineState: currentState,
+                    timeSinceRespawnStart: timeSinceRespawnStart,
                     xPos: dino.xPos,
                     yPos: dino.yPos,
                     groundYPos: dino.groundYPos,
@@ -1255,7 +1288,8 @@
                     mac: mac,
                     respawning: dino.respawning,
                     status: dino.status,
-                    stateMachineState: currentState
+                    stateMachineState: currentState,
+                    timeSinceRespawnStart: timeSinceRespawnStart
                 });
                 dino.update(0, Trex.status.RESPAWNING_FALLING);
                 if (this.soundFx && this.soundFx.BUTTON_PRESS) {
@@ -1319,108 +1353,6 @@
             }
         },
 
-        /**
-         * Update players based on API data.
-         * @param {Array} players Array of player objects with mac and buttonPresses
-         * @deprecated This function is kept for backward compatibility but is no longer used
-         */
-        updatePlayers: function (players) {
-            if (!Array.isArray(players)) {
-                return;
-            }
-
-            // Create or update dinos for each player
-            for (var i = 0; i < players.length; i++) {
-                var player = players[i];
-                var mac = player.mac;
-                var buttonPresses = player.buttonPresses || 0;
-
-                // Create dino if it doesn't exist
-                if (!this.playerMap[mac]) {
-                    // Create dino with game mode
-                    var dino = new Trex(this.canvas, this.spriteDef.TREX, this.gameMode);
-                    // All dinos start at the same x position (they share the track)
-                    // Small offset for visual distinction (optional - can be removed if you want them overlapping)
-                    dino.xPos = Trex.config.START_X_POS + (i * 2); // 2px offset per dino
-                    dino.originalXPos = dino.xPos; // Store original xPos for respawn
-                    // Initialize score tracking for this dino
-                    dino.distanceRan = 0;
-                    dino.mac = mac; // Store MAC for reference
-                    // State properties (crashed, respawning, jumping, ducking) are managed by state machine
-                    // Start dino in running state - state machine will sync all properties
-                    dino.update(0, Trex.status.RUNNING);
-                    this.tRexes.push(dino);
-                    this.playerMap[mac] = dino;
-                    this.lastButtonPresses[mac] = buttonPresses;
-                }
-
-                // Check if button presses increased (button was pressed)
-                var lastPresses = this.lastButtonPresses[mac] || 0;
-            Logger.debug('BUTTON_PRESS', 'Checking button press for player', {
-                mac: mac,
-                name: player.name,
-                buttonPresses: buttonPresses,
-                lastPresses: lastPresses,
-                increased: buttonPresses > lastPresses
-            });
-                
-                if (buttonPresses > lastPresses) {
-                    var dino = this.playerMap[mac];
-                    Logger.info('BUTTON_PRESS', 'Button press detected! Triggering jump', {
-                        mac: mac,
-                        name: player.name,
-                        buttonPresses: buttonPresses,
-                        lastPresses: lastPresses,
-                        hasDino: !!dino,
-                        dinoJumping: dino ? dino.jumping : 'N/A',
-                        dinoDucking: dino ? dino.ducking : 'N/A',
-                        dinoState: dino && dino.stateMachine ? dino.stateMachine.getState() : 'N/A',
-                        currentSpeed: this.currentSpeed
-                    });
-                    
-                    // Trigger jump if not already jumping
-                    if (dino && !dino.jumping && !dino.ducking) {
-                        Logger.info('BUTTON_PRESS', 'Starting jump for dino', {
-                            mac: mac,
-                            name: player.name,
-                            speed: this.currentSpeed
-                        });
-                        if (this.soundFx && this.soundFx.BUTTON_PRESS) {
-                            this.playSound(this.soundFx.BUTTON_PRESS);
-                        }
-                        dino.startJump(this.currentSpeed);
-                        Logger.info('BUTTON_PRESS', 'Jump started. Dino state after jump', {
-                            mac: mac,
-                            jumping: dino.jumping,
-                            state: dino.stateMachine ? dino.stateMachine.getState() : 'N/A'
-                        });
-                    } else {
-                        Logger.debug('BUTTON_PRESS', 'Jump NOT triggered - dino conditions not met', {
-                            mac: mac,
-                            hasDino: !!dino,
-                            jumping: dino ? dino.jumping : false,
-                            ducking: dino ? dino.ducking : false
-                        });
-                    }
-                    this.lastButtonPresses[mac] = buttonPresses;
-                }
-            }
-
-            // Remove dinos for players that are no longer in the API response
-            var currentMacs = players.map(function(p) { return p.mac; });
-            for (var mac in this.playerMap) {
-                if (currentMacs.indexOf(mac) === -1) {
-                    // Remove dino from array
-                    var dino = this.playerMap[mac];
-                    var index = this.tRexes.indexOf(dino);
-                    if (index > -1) {
-                        this.tRexes.splice(index, 1);
-                    }
-                    delete this.playerMap[mac];
-                    delete this.lastButtonPresses[mac];
-                }
-            }
-        },
 
         /**
          * Process keydown.
@@ -1887,7 +1819,7 @@
                 dino.xPos = dino.originalXPos;
             }
             // Reset dino animation properties
-            dino.yPos = dino.groundYPos;
+            // Position will be set by state machine entry handler when transitioning to RESPAWNING_BLINKING
             dino.jumpVelocity = 0;
             dino.speedDrop = false;
             dino.jumpCount = 0;

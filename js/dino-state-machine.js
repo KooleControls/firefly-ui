@@ -608,19 +608,30 @@
         initDefaultEntryHandlers: function() {
             var self = this;
             
-            // RESPAWNING_BLINKING: Position dino above ground
+            // RESPAWNING_BLINKING: Position dino above ground and reset xPos
             this.entryHandlers[DinoState.RESPAWNING_BLINKING] = function(newState, oldState, data) {
                 if (!self.dino) return;
                 var floatHeight = 50; // Pixels above ground
                 self.dino.yPos = self.dino.groundYPos - floatHeight;
                 self.dino.jumpVelocity = 0; // Keep it floating
-                self.dino.respawnStartTime = 0; // Will be set in updateRespawnAnimation
+                // Reset xPos to original position (or START_X_POS as fallback)
+                if (self.dino.originalXPos !== undefined) {
+                    self.dino.xPos = self.dino.originalXPos;
+                } else if (window.Trex && window.Trex.config && window.Trex.config.START_X_POS !== undefined) {
+                    self.dino.xPos = window.Trex.config.START_X_POS;
+                }
+                // Set respawn start time immediately to start the 1-second timer
+                var timeStampFn = (typeof getTimeStamp !== 'undefined') ? getTimeStamp : 
+                                 (window.getTimeStamp ? window.getTimeStamp : Date.now);
+                self.dino.respawnStartTime = timeStampFn();
                 self.dino.respawnBlinkCount = 0;
                 self.dino.respawnFallTriggered = false;
                 Logger.debug('DINO_STATE_MACHINE', 'RESPAWNING_BLINKING entry: Positioned dino above ground', {
+                    xPos: self.dino.xPos,
                     yPos: self.dino.yPos,
                     groundYPos: self.dino.groundYPos,
-                    floatHeight: floatHeight
+                    floatHeight: floatHeight,
+                    originalXPos: self.dino.originalXPos
                 });
             };
 

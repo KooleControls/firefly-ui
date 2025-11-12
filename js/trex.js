@@ -29,7 +29,7 @@
         this.timer = 0;
         this.msPerFrame = 1000 / FPS;
         this.config = Trex.config;
-        // Current status (legacy - kept for backward compatibility)
+        // Current status (synced from state machine)
         this.status = Trex.status.WAITING;
 
         this.jumping = false;
@@ -160,7 +160,7 @@
         init: function () {
             this.groundYPos = window.Runner.defaultDimensions.HEIGHT - this.config.HEIGHT -
                 window.Runner.config.BOTTOM_PAD;
-            this.yPos = this.groundYPos;
+            // Position will be set by state machine entry handler when transitioning to WAITING
             this.minJumpHeight = this.groundYPos - this.config.MIN_JUMP_HEIGHT;
 
             this.draw(0, 0);
@@ -222,8 +222,7 @@
         update: function (deltaTime, opt_status) {
             this.timer += deltaTime;
 
-            // If state machine exists, it is the source of truth
-            // Only update status if state machine doesn't exist (backward compatibility)
+            // State machine is the source of truth
             if (opt_status && this.stateMachine) {
                 Logger.debug('TREX', 'update() called with status: ' + opt_status);
                 // Convert Trex.status to DinoState and transition through state machine
@@ -251,18 +250,6 @@
                 }
                 // Don't update status directly - state machine is source of truth
                 // Status will be synced by state machine after successful transition
-            } else if (opt_status) {
-                // Legacy support: update status directly if no state machine
-                Logger.debug('TREX', 'update() called with status but no state machine - using legacy mode');
-                this.status = opt_status;
-                this.currentFrame = 0;
-                this.msPerFrame = Trex.animFrames[opt_status].msPerFrame;
-                this.currentAnimFrames = Trex.animFrames[opt_status].frames;
-
-                if (opt_status == Trex.status.WAITING) {
-                    this.animStartTime = getTimeStamp();
-                    this.setBlinkDelay();
-                }
             }
 
             // Game intro animation, T-rex moves in from the left.
@@ -293,10 +280,6 @@
 
             // Speed drop becomes duck if the down key is still being pressed.
             if (this.speedDrop && this.stateMachine && this.stateMachine.isGrounded()) {
-                this.speedDrop = false;
-                this.setDuck(true);
-            } else if (this.speedDrop && !this.stateMachine && this.yPos == this.groundYPos) {
-                // Fallback for legacy code without state machine
                 this.speedDrop = false;
                 this.setDuck(true);
             }
@@ -394,14 +377,6 @@
                 this.yPos = newYPos;
                 this.jumpVelocity = 0; // Keep it floating
             }
-            
-            // Log position every frame for debugging (will be noisy but helpful)
-            console.log('[RESPAWN_BLINKING] Position update', {
-                xPos: this.xPos,
-                yPos: this.yPos,
-                groundYPos: this.groundYPos,
-                status: this.status
-            });
 
             var elapsedTime = currentTime - this.respawnStartTime;
             var blinkInterval = this.respawnBlinkDelay * 2; // Time for one complete blink (open + close)
@@ -425,22 +400,6 @@
          * @param {number} deltaTime
          */
         updateRespawnFalling: function (deltaTime) {
-            // Ensure we're above ground (safety check)
-            if (this.yPos >= this.groundYPos) {
-                // Already on ground, switch to running
-                console.log('[RESPAWN_FALLING] Dino already on ground, switching to RUNNING', {
-                    xPos: this.xPos,
-                    yPos: this.yPos,
-                    groundYPos: this.groundYPos
-                });
-                this.yPos = this.groundYPos;
-                this.respawnStartTime = 0;
-                this.respawnBlinkCount = 0;
-                this.jumpVelocity = 0;
-                this.update(0, Trex.status.RUNNING);
-                return;
-            }
-
             // Apply gravity to make it fall (use same approach as updateJump)
             // Use standard 60fps for physics calculations (not animation frame rate)
             var msPerFrame = 1000 / 60; // ~16.67ms per frame at 60fps
@@ -452,39 +411,18 @@
             // Then apply gravity
             this.jumpVelocity += this.config.GRAVITY * framesElapsed;
             
-            // Log position every frame for debugging
-            console.log('[RESPAWN_FALLING] Position update', {
-                xPos: this.xPos,
-                yPos: this.yPos,
-                groundYPos: this.groundYPos,
-                jumpVelocity: this.jumpVelocity,
-                status: this.status
-            });
-            
             // Draw the dino while falling
             this.draw(this.currentAnimFrames[0], 0);
             
             // Update state machine with new position - it will handle automatic transitions
-            if (this.stateMachine) {
-                var wasFalling = this.stateMachine.isState(DinoState.RESPAWNING_FALLING);
-                var transitioned = this.stateMachine.updatePosition(deltaTime);
-                // If state machine transitioned from RESPAWNING_FALLING to RUNNING, do cleanup
-                if (wasFalling && transitioned && this.stateMachine.isState(DinoState.RUNNING)) {
-                    // Reset respawn animation state (state machine entry handler already set position)
-                    this.respawnStartTime = 0;
-                    this.respawnBlinkCount = 0;
-                    this.jumpVelocity = 0;
-                }
-            } else {
-                // Fallback for legacy code without state machine
-                // Check if reached ground
-                if (this.yPos >= this.groundYPos) {
-                    this.yPos = this.groundYPos;
-                    this.respawnStartTime = 0;
-                    this.respawnBlinkCount = 0;
-                    this.jumpVelocity = 0;
-                    this.update(0, Trex.status.RUNNING);
-                }
+            var wasFalling = this.stateMachine.isState(DinoState.RESPAWNING_FALLING);
+            var transitioned = this.stateMachine.updatePosition(deltaTime);
+            // If state machine transitioned from RESPAWNING_FALLING to RUNNING, do cleanup
+            if (wasFalling && transitioned && this.stateMachine.isState(DinoState.RUNNING)) {
+                // Reset respawn animation state (state machine entry handler already set position)
+                this.respawnStartTime = 0;
+                this.respawnBlinkCount = 0;
+                this.jumpVelocity = 0;
             }
         },
 
@@ -561,24 +499,15 @@
             }
 
             // Update state machine with new position - it will handle automatic transitions
-            var wasJumping = this.stateMachine && this.stateMachine.isState(DinoState.JUMPING);
-            if (this.stateMachine) {
-                var transitioned = this.stateMachine.updatePosition(deltaTime);
-                // If state machine transitioned from JUMPING to RUNNING, do cleanup
-                if (wasJumping && transitioned && this.stateMachine.isState(DinoState.RUNNING)) {
-                    // Reset jump-related properties (state machine entry handler already set position)
-                    this.jumpVelocity = 0;
-                    this.midair = false;
-                    this.speedDrop = false;
-                    this.jumpCount++;
-                }
-            } else {
-                // Fallback for legacy code without state machine
-                // Back down at ground level. Jump completed.
-                if (this.yPos > this.groundYPos) {
-                    this.reset();
-                    this.jumpCount++;
-                }
+            var wasJumping = this.stateMachine.isState(DinoState.JUMPING);
+            var transitioned = this.stateMachine.updatePosition(deltaTime);
+            // If state machine transitioned from JUMPING to RUNNING, do cleanup
+            if (wasJumping && transitioned && this.stateMachine.isState(DinoState.RUNNING)) {
+                // Reset jump-related properties (state machine entry handler already set position)
+                this.jumpVelocity = 0;
+                this.midair = false;
+                this.speedDrop = false;
+                this.jumpCount++;
             }
 
             this.update(deltaTime);
@@ -609,7 +538,7 @@
          * Reset the t-rex to running at start of game.
          */
         reset: function () {
-            this.yPos = this.groundYPos;
+            // Position will be set by state machine entry handler when transitioning to RUNNING
             this.jumpVelocity = 0;
             // jumping and ducking properties are synced by state machine - don't set directly
             this.update(0, Trex.status.RUNNING);
