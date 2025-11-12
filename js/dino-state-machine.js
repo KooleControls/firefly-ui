@@ -169,17 +169,6 @@
             });
 
             if (!isValid) {
-                // Always log invalid transitions regardless of logger config - this is important for debugging
-                console.warn('[DINO_STATE_MACHINE] INVALID TRANSITION ATTEMPT:', {
-                    from: this.currentState,
-                    to: normalizedState,
-                    gameMode: this.gameMode,
-                    crashed: this.crashed,
-                    respawning: this.respawning,
-                    canRespawn: this.canRespawn,
-                    timestamp: new Date().toISOString(),
-                    stackTrace: new Error().stack
-                });
                 return false;
             }
 

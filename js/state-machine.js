@@ -83,14 +83,6 @@
                     return GameState[key] === normalizedState;
                 });
                 if (!stateKey) {
-                    // Always log invalid state attempts regardless of logger config
-                    console.warn('[GAME_STATE_MACHINE] INVALID STATE ATTEMPT:', {
-                        requestedState: newState,
-                        currentState: this.currentState,
-                        availableStates: Object.keys(GameState),
-                        timestamp: new Date().toISOString(),
-                        stackTrace: new Error().stack
-                    });
                     return false;
                 }
             } else {

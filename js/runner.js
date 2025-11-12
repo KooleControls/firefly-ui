@@ -775,7 +775,7 @@
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ score: score, mac: mac })
                     }).catch((err) => {
-                        console.warn("Score push failed for", mac, err);
+                        // Score push failed
                     });
                 }
             }, 1000); // every 1 second
@@ -1166,21 +1166,9 @@
             var isRespawnBlinkingTransition = currentState === DinoState.RESPAWNING_BLINKING;
             
             if (!isRespawnBlinkingTransition && currentTime - lastButtonTime < buttonDebounceTime) {
-                console.log('[BUTTON_PRESS] Ignoring duplicate button press (debounced)', {
-                    mac: mac,
-                    timeSinceLastPress: currentTime - lastButtonTime,
-                    timestamp: new Date().toISOString()
-                });
                 return; // Ignore duplicate button press
             }
             dino.lastButtonTime = currentTime;
-            console.log('[BUTTON_PRESS] Current state at start of handler:', currentState, {
-                mac: mac,
-                xPos: dino ? dino.xPos : 'N/A',
-                yPos: dino ? dino.yPos : 'N/A',
-                groundYPos: dino ? dino.groundYPos : 'N/A',
-                timestamp: new Date().toISOString()
-            });
 
             // If dino is crashed, transition to RESPAWNING_BLINKING on button press
             // Use state machine to check crashed state - check BEFORE transitioning
@@ -1195,19 +1183,9 @@
                 
                 if (dino.crashTime === 0) {
                     // Crash time not set, allow respawn (backward compatibility)
-                    console.warn('[BUTTON_PRESS] Crash time not set, allowing respawn anyway');
                 } else if (timeSinceCrash < minCrashDuration) {
                     // Not enough time has passed since crash
                     var remainingTime = minCrashDuration - timeSinceCrash;
-                    console.log('[BUTTON_PRESS] Button press during CRASHED state - but only ' + Math.round(timeSinceCrash) + 'ms have passed. Need ' + minCrashDuration + 'ms. Waiting ' + Math.round(remainingTime) + 'ms more.', {
-                        mac: mac,
-                        status: dino.status,
-                        stateMachineState: currentState,
-                        timeSinceCrash: timeSinceCrash,
-                        crashTime: dino.crashTime,
-                        currentTime: currentTime,
-                        timestamp: new Date().toISOString()
-                    });
                     Logger.info('BUTTON_PRESS', 'Button press while crashed - but not enough time has passed', {
                         mac: mac,
                         status: dino.status,
@@ -1218,16 +1196,6 @@
                     return; // Don't allow respawn yet
                 }
                 
-                console.log('[BUTTON_PRESS] Button press received during CRASHED state - transitioning to RESPAWNING_BLINKING', {
-                    mac: mac,
-                    status: dino.status,
-                    stateMachineState: currentState,
-                    timeSinceCrash: timeSinceCrash,
-                    xPos: dino.xPos,
-                    yPos: dino.yPos,
-                    groundYPos: dino.groundYPos,
-                    timestamp: new Date().toISOString()
-                });
                 Logger.info('BUTTON_PRESS', 'Button press while crashed - transitioning to RESPAWNING_BLINKING', {
                     mac: mac,
                     status: dino.status,
@@ -1257,15 +1225,6 @@
                 if (dino.respawnStartTime === 0 || timeSinceRespawnStart < minRespawnBlinkDuration) {
                     // Not enough time has passed since respawn started
                     var remainingTime = minRespawnBlinkDuration - timeSinceRespawnStart;
-                    console.log('[BUTTON_PRESS] Button press during RESPAWNING_BLINKING - but only ' + Math.round(timeSinceRespawnStart) + 'ms have passed. Need ' + minRespawnBlinkDuration + 'ms. Waiting ' + Math.round(remainingTime) + 'ms more.', {
-                        mac: mac,
-                        status: dino.status,
-                        stateMachineState: currentState,
-                        timeSinceRespawnStart: timeSinceRespawnStart,
-                        respawnStartTime: dino.respawnStartTime,
-                        currentTime: currentTime,
-                        timestamp: new Date().toISOString()
-                    });
                     Logger.info('BUTTON_PRESS', 'Button press during respawn blinking - but not enough time has passed', {
                         mac: mac,
                         timeSinceRespawnStart: timeSinceRespawnStart,
@@ -1274,16 +1233,6 @@
                     return; // Don't allow transition yet
                 }
                 
-                console.log('[BUTTON_PRESS] Button press received during RESPAWNING_BLINKING state - transitioning to RESPAWNING_FALLING', {
-                    mac: mac,
-                    status: dino.status,
-                    stateMachineState: currentState,
-                    timeSinceRespawnStart: timeSinceRespawnStart,
-                    xPos: dino.xPos,
-                    yPos: dino.yPos,
-                    groundYPos: dino.groundYPos,
-                    timestamp: new Date().toISOString()
-                });
                 Logger.info('BUTTON_PRESS', 'Button press during respawn blinking - transitioning to falling', {
                     mac: mac,
                     respawning: dino.respawning,
@@ -1311,15 +1260,6 @@
 
             // If dino is waiting, transition to running on first button press
             if (dino && dino.stateMachine && currentState === DinoState.WAITING) {
-                console.log('[BUTTON_PRESS] Button press received during WAITING state - transitioning to RUNNING', {
-                    mac: mac,
-                    status: dino.status,
-                    stateMachineState: currentState,
-                    xPos: dino.xPos,
-                    yPos: dino.yPos,
-                    groundYPos: dino.groundYPos,
-                    timestamp: new Date().toISOString()
-                });
                 Logger.info('BUTTON_PRESS', 'Button press during waiting - transitioning to running', {
                     mac: mac,
                     status: dino.status,
@@ -1890,7 +1830,6 @@
             this.canvasCtx.font = '14px Arial';
             this.canvasCtx.fillStyle = '#cccccc';
             this.canvasCtx.fillText('Dinos can crash individually and respawn', centerX, centerY + 40);
-            this.canvasCtx.fillText('with counter reset to 0', centerX, centerY + 55);
 
             this.canvasCtx.restore();
         }

@@ -374,13 +374,6 @@
                 // Position dino above ground (float height)
                 var floatHeight = 50; // Pixels above ground
                 var newYPos = this.groundYPos - floatHeight;
-                console.log('[RESPAWN_BLINKING] Positioning dino above ground', {
-                    oldYPos: this.yPos,
-                    newYPos: newYPos,
-                    groundYPos: this.groundYPos,
-                    floatHeight: floatHeight,
-                    xPos: this.xPos
-                });
                 this.yPos = newYPos;
                 this.jumpVelocity = 0; // Keep it floating
             }
