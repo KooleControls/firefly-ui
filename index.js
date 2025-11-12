@@ -110,6 +110,7 @@
      */
     Runner.config = {
         ACCELERATION: 0.001,
+        ENABLE_SPEED_ACCELERATION: true, // Set to false to disable speed increase over time
         BG_CLOUD_SPEED: 0.2,
         BOTTOM_PAD: 10,
         CLEAR_TIME: 3000,
@@ -613,7 +614,9 @@
                         }
                     }
 
-                    if (this.currentSpeed < this.config.MAX_SPEED) {
+                    // Increase speed over time if acceleration is enabled
+                    if (this.config.ENABLE_SPEED_ACCELERATION && 
+                        this.currentSpeed < this.config.MAX_SPEED) {
                         this.currentSpeed += this.config.ACCELERATION;
                     }
                 } else {
