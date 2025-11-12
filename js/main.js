@@ -7,5 +7,10 @@ function onDocumentLoad() {
     new Runner('.interstitial-wrapper');
 }
 
-document.addEventListener('DOMContentLoaded', onDocumentLoad);
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', onDocumentLoad);
+} else {
+    // DOM is already loaded
+    onDocumentLoad();
+}
 

@@ -62,6 +62,10 @@
         this.inverted = false;
         this.invertTimer = 0;
         this.resizeTimerId_ = null;
+        
+        // Game mode: 'collective' or 'competitive'
+        this.gameMode = null; // Will be set by user selection
+        this.waitingForModeSelection = true; // Whether we're waiting for mode selection
 
         this.playCount = 0;
 
@@ -244,10 +248,10 @@
                 this.createTouchController();
             }
 
-            // Auto-start the game
+            // Load sounds but don't start game yet - wait for mode selection
             this.loadSounds();
-            this.playing = true;
-            this.activated = true;
+            this.playing = false;
+            this.activated = false;
             this.playingIntro = false;
             
             // Set container to full width and height immediately (skip intro animation)
@@ -256,7 +260,8 @@
             this.setArcadeMode();
 
             this.startListening();
-            this.startApiPolling();
+            // Show mode selection screen
+            this.showModeSelection();
             this.update();
 
             window.addEventListener(RunnerGlobal.events.RESIZE,
@@ -409,12 +414,24 @@
             var deltaTime = now - (this.time || now);
             this.time = now;
 
+            // Draw mode selection screen if waiting for selection
+            if (this.waitingForModeSelection) {
+                this.clearCanvas();
+                this.drawModeSelection();
+                this.scheduleNextUpdate();
+                return;
+            }
+
             if (this.playing) {
                 this.clearCanvas();
 
                 // Update all dinos
                 for (var i = 0; i < this.tRexes.length; i++) {
                     var dino = this.tRexes[i];
+                    // Skip crashed dinos in competitive mode for jumping updates
+                    if (this.gameMode === 'competitive' && dino.crashed) {
+                        continue;
+                    }
                     if (dino.jumping) {
                         dino.updateJump(deltaTime);
                     }
@@ -445,32 +462,41 @@
                 }
 
                 // Check for collisions with all dinos.
-                var collision = false;
                 if (hasObstacles && this.horizon.obstacles.length > 0) {
                     for (var i = 0; i < this.tRexes.length; i++) {
-                        if (checkForCollision(this.horizon.obstacles[0], this.tRexes[i])) {
-                            collision = true;
-                            break;
+                        var dino = this.tRexes[i];
+                        // Skip crashed dinos in competitive mode
+                        if (this.gameMode === 'competitive' && dino.crashed) {
+                            continue;
+                        }
+                        
+                        if (checkForCollision(this.horizon.obstacles[0], dino)) {
+                            if (this.gameMode === 'collective') {
+                                // Collective mode: any crash = game over for all
+                                this.gameOver();
+                                return;
+                            } else if (this.gameMode === 'competitive') {
+                                // Competitive mode: mark this dino as crashed
+                                this.handleDinoCrash(dino);
+                            }
                         }
                     }
                 }
 
-                if (!collision) {
-                    // Update distance for each dino
-                    var distanceIncrement = this.currentSpeed * deltaTime / this.msPerFrame;
-                    for (var i = 0; i < this.tRexes.length; i++) {
-                        if (this.tRexes[i].distanceRan !== undefined) {
-                            this.tRexes[i].distanceRan += distanceIncrement;
-                        }
+                // Update distance for non-crashed dinos
+                var distanceIncrement = this.currentSpeed * deltaTime / this.msPerFrame;
+                for (var i = 0; i < this.tRexes.length; i++) {
+                    var dino = this.tRexes[i];
+                    // Only update distance for non-crashed dinos
+                    if (!dino.crashed && dino.distanceRan !== undefined) {
+                        dino.distanceRan += distanceIncrement;
                     }
+                }
 
-                    // Increase speed over time if acceleration is enabled
-                    if (this.config.ENABLE_SPEED_ACCELERATION && 
-                        this.currentSpeed < this.config.MAX_SPEED) {
-                        this.currentSpeed += this.config.ACCELERATION;
-                    }
-                } else {
-                    this.gameOver();
+                // Increase speed over time if acceleration is enabled
+                if (this.config.ENABLE_SPEED_ACCELERATION && 
+                    this.currentSpeed < this.config.MAX_SPEED) {
+                    this.currentSpeed += this.config.ACCELERATION;
                 }
 
                 // Update high score only (no current score display)
@@ -517,11 +543,14 @@
                     }
                 }
 
-                // Draw scores above each dino
+                // Draw scores above each dino (only non-crashed ones)
                 this.drawDinoScores();
+            } else if (this.waitingForModeSelection) {
+                // Keep updating to show mode selection screen
+                this.scheduleNextUpdate();
             }
 
-            // Update all dinos
+            // Update all dinos (only non-crashed ones in competitive mode)
             var shouldUpdate = false;
             if (this.playing) {
                 shouldUpdate = true;
@@ -537,7 +566,19 @@
 
             if (shouldUpdate) {
                 for (var i = 0; i < this.tRexes.length; i++) {
-                    this.tRexes[i].update(deltaTime);
+                    var dino = this.tRexes[i];
+                    // In competitive mode, still update crashed dinos so they're drawn,
+                    // but skip movement/jumping updates
+                    if (this.gameMode === 'competitive' && dino.crashed) {
+                        // Move crashed dino backwards with the ground scroll
+                        // The ground scrolls at currentSpeed * (FPS / 1000) * deltaTime pixels per update
+                        var groundScrollIncrement = Math.floor(this.currentSpeed * (FPS / 1000) * deltaTime);
+                        dino.xPos -= groundScrollIncrement;
+                        // Still update to draw the crashed state
+                        dino.update(deltaTime);
+                        continue;
+                    }
+                    dino.update(deltaTime);
                 }
                 this.scheduleNextUpdate();
             }
@@ -568,8 +609,22 @@
          */
         startListening: function () {
             // Keys.
+            // Add listeners to both document and window to ensure we catch keydown events
             document.addEventListener(RunnerGlobal.events.KEYDOWN, this);
             document.addEventListener(RunnerGlobal.events.KEYUP, this);
+            window.addEventListener(RunnerGlobal.events.KEYDOWN, this);
+            window.addEventListener(RunnerGlobal.events.KEYUP, this);
+            
+            // Also add a direct listener to ensure keydown events are captured
+            var self = this;
+            var directHandler = function(e) {
+                if (self.waitingForModeSelection) {
+                    self.onKeyDown(e);
+                }
+            };
+            document.addEventListener('keydown', directHandler);
+            window.addEventListener('keydown', directHandler);
+            this.directKeyHandler = directHandler; // Store reference for cleanup
 
             if (IS_MOBILE) {
                 // Mobile only touch devices.
@@ -589,6 +644,15 @@
         stopListening: function () {
             document.removeEventListener(RunnerGlobal.events.KEYDOWN, this);
             document.removeEventListener(RunnerGlobal.events.KEYUP, this);
+            window.removeEventListener(RunnerGlobal.events.KEYDOWN, this);
+            window.removeEventListener(RunnerGlobal.events.KEYUP, this);
+            
+            // Remove direct handler if it exists
+            if (this.directKeyHandler) {
+                document.removeEventListener('keydown', this.directKeyHandler);
+                window.removeEventListener('keydown', this.directKeyHandler);
+                this.directKeyHandler = null;
+            }
 
             if (IS_MOBILE) {
                 this.touchController.removeEventListener(RunnerGlobal.events.TOUCHSTART, this);
@@ -806,10 +870,12 @@
             // Small offset for visual distinction
             var offset = this.tRexes.length * 2;
             dino.xPos = Trex.config.START_X_POS + offset;
+            dino.originalXPos = dino.xPos; // Store original xPos for respawn
             // Initialize score tracking for this dino
             dino.distanceRan = 0;
             dino.mac = mac; // Store MAC for reference
             dino.name = name || mac; // Store name if provided
+            dino.crashed = false; // Initialize crashed state
             // Start dino in running state
             dino.update(0, Trex.status.RUNNING);
             this.tRexes.push(dino);
@@ -892,9 +958,11 @@
                     // All dinos start at the same x position (they share the track)
                     // Small offset for visual distinction (optional - can be removed if you want them overlapping)
                     dino.xPos = Trex.config.START_X_POS + (i * 2); // 2px offset per dino
+                    dino.originalXPos = dino.xPos; // Store original xPos for respawn
                     // Initialize score tracking for this dino
                     dino.distanceRan = 0;
                     dino.mac = mac; // Store MAC for reference
+                    dino.crashed = false; // Initialize crashed state
                     // Start dino in running state
                     dino.update(0, Trex.status.RUNNING);
                     this.tRexes.push(dino);
@@ -941,6 +1009,23 @@
             // Prevent native page scrolling whilst tapping on mobile.
             if (IS_MOBILE && this.playing) {
                 e.preventDefault();
+            }
+
+            // Handle game mode selection
+            if (this.waitingForModeSelection) {
+                var keyCode = String(e.keyCode);
+                var key = e.key || e.code || '';
+                
+                // Check both keyCode and key for better compatibility
+                if (keyCode === '49' || keyCode === '97' || key === '1' || key === 'Digit1') { // Key '1'
+                    this.selectGameMode('collective');
+                    e.preventDefault();
+                    return;
+                } else if (keyCode === '50' || keyCode === '98' || key === '2' || key === 'Digit2') { // Key '2'
+                    this.selectGameMode('competitive');
+                    e.preventDefault();
+                    return;
+                }
             }
 
             if (e.target != this.detailsButton) {
@@ -1087,11 +1172,17 @@
                 this.clearCanvas();
                 this.distanceMeter.reset(this.highestScore);
                 this.horizon.reset();
-                // Reset all dinos
+                // Reset all dinos (including crashed state for competitive mode)
                 for (var i = 0; i < this.tRexes.length; i++) {
-                    this.tRexes[i].reset();
-                    if (this.tRexes[i].distanceRan !== undefined) {
-                        this.tRexes[i].distanceRan = 0;
+                    var dino = this.tRexes[i];
+                    dino.crashed = false;
+                    // Reset xPos to original position
+                    if (dino.originalXPos !== undefined) {
+                        dino.xPos = dino.originalXPos;
+                    }
+                    dino.reset();
+                    if (dino.distanceRan !== undefined) {
+                        dino.distanceRan = 0;
                     }
                 }
                 this.playSound(this.soundFx.BUTTON_PRESS);
@@ -1161,6 +1252,10 @@
         drawDinoScores: function () {
             for (var i = 0; i < this.tRexes.length; i++) {
                 var dino = this.tRexes[i];
+                // Skip crashed dinos in competitive mode
+                if (this.gameMode === 'competitive' && dino.crashed) {
+                    continue;
+                }
                 if (dino.distanceRan !== undefined) {
                     var score = Math.ceil(this.distanceMeter.getActualDistance(dino.distanceRan));
                     var scoreText = score.toString();
@@ -1194,6 +1289,107 @@
                 this.inverted = document.body.classList.toggle(RunnerGlobal.classes.INVERTED,
                     this.invertTrigger);
             }
+        },
+
+        /**
+         * Show game mode selection screen.
+         */
+        showModeSelection: function () {
+            // Mode selection will be drawn in the update loop
+            this.modeSelectionPanel = {
+                visible: true
+            };
+        },
+
+        /**
+         * Select game mode and start the game.
+         * @param {string} mode 'collective' or 'competitive'
+         */
+        selectGameMode: function (mode) {
+            this.gameMode = mode;
+            this.waitingForModeSelection = false;
+            this.modeSelectionPanel = null;
+            
+            // Start the game
+            this.playing = true;
+            this.activated = true;
+            this.startApiPolling();
+        },
+
+        /**
+         * Handle individual dino crash in competitive mode.
+         * @param {Object} dino The crashed dino
+         */
+        handleDinoCrash: function (dino) {
+            if (dino.crashed) {
+                return; // Already crashed
+            }
+            
+            this.playSound(this.soundFx.HIT);
+            dino.crashed = true;
+            dino.update(100, Trex.status.CRASHED);
+            
+            // Reset counter and respawn after a delay
+            var self = this;
+            setTimeout(function() {
+                self.respawnDino(dino);
+            }, 2000); // 2 second delay before respawn
+        },
+
+        /**
+         * Respawn a dino in competitive mode.
+         * @param {Object} dino The dino to respawn
+         */
+        respawnDino: function (dino) {
+            dino.crashed = false;
+            dino.distanceRan = 0; // Reset counter to 0
+            // Reset xPos to original position
+            if (dino.originalXPos !== undefined) {
+                dino.xPos = dino.originalXPos;
+            }
+            dino.reset();
+            dino.update(0, Trex.status.RUNNING);
+        },
+
+        /**
+         * Draw mode selection screen.
+         */
+        drawModeSelection: function () {
+            if (!this.modeSelectionPanel || !this.modeSelectionPanel.visible) {
+                return;
+            }
+
+            var centerX = this.dimensions.WIDTH / 2;
+            var centerY = this.dimensions.HEIGHT / 2;
+
+            // Draw semi-transparent overlay
+            this.canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            this.canvasCtx.fillRect(0, 0, this.dimensions.WIDTH, this.dimensions.HEIGHT);
+
+            // Draw title
+            this.canvasCtx.save();
+            this.canvasCtx.font = 'bold 24px Arial';
+            this.canvasCtx.fillStyle = '#ffffff';
+            this.canvasCtx.textAlign = 'center';
+            this.canvasCtx.textBaseline = 'middle';
+            this.canvasCtx.fillText('Select Game Mode', centerX, centerY - 80);
+
+            // Draw mode options
+            this.canvasCtx.font = '18px Arial';
+            this.canvasCtx.fillText('Press 1: Collective Mode', centerX, centerY - 30);
+            this.canvasCtx.font = '14px Arial';
+            this.canvasCtx.fillStyle = '#cccccc';
+            this.canvasCtx.fillText('If one dino crashes, game over for all', centerX, centerY - 10);
+
+            this.canvasCtx.font = '18px Arial';
+            this.canvasCtx.fillStyle = '#ffffff';
+            this.canvasCtx.fillText('Press 2: Competitive Mode', centerX, centerY + 20);
+            this.canvasCtx.font = '14px Arial';
+            this.canvasCtx.fillStyle = '#cccccc';
+            this.canvasCtx.fillText('Dinos can crash individually and respawn', centerX, centerY + 40);
+            this.canvasCtx.fillText('with counter reset to 0', centerX, centerY + 55);
+
+            this.canvasCtx.restore();
         }
     };
 
