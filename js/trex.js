@@ -302,53 +302,82 @@
         },
 
         /**
-         * Draw the t-rex to a particular position.
-         * @param {number} x
-         * @param {number} y
-         */
-        draw: function (x, y) {
-            var sourceX = x;
-            var sourceY = y;
-            var sourceWidth = this.ducking && this.status != Trex.status.CRASHED ?
-                this.config.WIDTH_DUCK : this.config.WIDTH;
-            var sourceHeight = this.config.HEIGHT;
+ * Draw the t-rex to a particular position.
+ * @param {number} x
+ * @param {number} y
+ */
+draw: function (x, y) {
+    var sourceX = x;
+    var sourceY = y;
+    var sourceWidth = this.ducking && this.status != Trex.status.CRASHED ?
+        this.config.WIDTH_DUCK : this.config.WIDTH;
+    var sourceHeight = this.config.HEIGHT;
 
-            if (IS_HIDPI) {
-                sourceX *= 2;
-                sourceY *= 2;
-                sourceWidth *= 2;
-                sourceHeight *= 2;
-            }
+    if (IS_HIDPI) {
+        sourceX *= 2;
+        sourceY *= 2;
+        sourceWidth *= 2;
+        sourceHeight *= 2;
+    }
 
-            // Adjustments for sprite sheet position.
-            sourceX += this.spritePos.x;
-            sourceY += this.spritePos.y;
+    // Adjustments for sprite sheet position.
+    sourceX += this.spritePos.x;
+    sourceY += this.spritePos.y;
 
-            // Save context state and apply transparency
-            this.canvasCtx.save();
-            this.canvasCtx.globalAlpha = 0.85; // Make dino slightly transparent
+    // Save context state
+    this.canvasCtx.save();
 
-            // Ducking.
-            if (this.ducking && this.status != Trex.status.CRASHED) {
-                this.canvasCtx.drawImage(window.Runner.imageSprite, sourceX, sourceY,
-                    sourceWidth, sourceHeight,
-                    this.xPos, this.yPos,
-                    this.config.WIDTH_DUCK, this.config.HEIGHT);
-            } else {
-                // Crashed whilst ducking. Trex is standing up so needs adjustment.
-                if (this.ducking && this.status == Trex.status.CRASHED) {
-                    this.xPos++;
-                }
-                // Standing / running
-                this.canvasCtx.drawImage(window.Runner.imageSprite, sourceX, sourceY,
-                    sourceWidth, sourceHeight,
-                    this.xPos, this.yPos,
-                    this.config.WIDTH, this.config.HEIGHT);
-            }
+    // Generate a random color once per T-Rex
+    if (!this.randomColor) {
+        const r = Math.floor(Math.random() * 256);
+        const g = Math.floor(Math.random() * 256);
+        const b = Math.floor(Math.random() * 256);
+        this.randomColor = `rgba(${r}, ${g}, ${b}, 0.5)`; // 50% opacity
+    }
 
-            // Restore context state
-            this.canvasCtx.restore();
-        },
+    // DUCKING
+    if (this.ducking && this.status != Trex.status.CRASHED) {
+        // Draw ducking frame
+        this.canvasCtx.drawImage(
+            window.Runner.imageSprite,
+            sourceX, sourceY,
+            sourceWidth, sourceHeight,
+            this.xPos, this.yPos,
+            this.config.WIDTH_DUCK, this.config.HEIGHT
+        );
+
+        // Apply random color tint
+        this.canvasCtx.globalCompositeOperation = 'source-atop';
+        this.canvasCtx.fillStyle = this.randomColor;
+        this.canvasCtx.fillRect(this.xPos, this.yPos,
+            this.config.WIDTH_DUCK, this.config.HEIGHT);
+
+    } else {
+        // Crashed while ducking → adjust X slightly
+        if (this.ducking && this.status == Trex.status.CRASHED) {
+            this.xPos++;
+        }
+
+        // Draw standing / running / jumping / crashed
+        this.canvasCtx.drawImage(
+            window.Runner.imageSprite,
+            sourceX, sourceY,
+            sourceWidth, sourceHeight,
+            this.xPos, this.yPos,
+            this.config.WIDTH, this.config.HEIGHT
+        );
+
+        // Apply random color tint
+        this.canvasCtx.globalCompositeOperation = 'source-atop';
+        this.canvasCtx.fillStyle = this.randomColor;
+        this.canvasCtx.fillRect(this.xPos, this.yPos,
+            this.config.WIDTH, this.config.HEIGHT);
+    }
+
+    // Restore canvas state
+    this.canvasCtx.restore();
+}
+,
 
         /**
          * Sets a random time for the blink to happen.
