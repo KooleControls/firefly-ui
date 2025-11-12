@@ -1080,7 +1080,13 @@
             var dino = new Trex(this.canvas, this.spriteDef.TREX, this.gameMode);
             // All dinos start at the same x position (they share the track)
             // Offset for visual distinction - spread dinos out more
-            var offset = this.tRexes.length * 8;
+
+            var spacingMin = 24;
+            var spacingMax = 48;
+            //do random spacing
+            var randomSpacing = Math.floor(Math.random() * (spacingMax - spacingMin + 1)) + spacingMin;
+
+            var offset = this.tRexes.length * randomSpacing;
             dino.xPos = Trex.config.START_X_POS + offset;
             dino.originalXPos = dino.xPos; // Store original xPos for respawn
             // Initialize score tracking for this dino

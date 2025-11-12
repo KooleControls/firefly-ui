@@ -326,6 +326,7 @@ draw: function (x, y) {
 
     // Save context state
     this.canvasCtx.save();
+    this.canvasCtx.globalAlpha = 0.80;
 
     // Generate a random color once per T-Rex
     if (!this.randomColor) {
