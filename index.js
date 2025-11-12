@@ -111,6 +111,7 @@
     Runner.config = {
         ACCELERATION: 0.001,
         ENABLE_SPEED_ACCELERATION: false,
+        ADD_BIRDS: false,
         BG_CLOUD_SPEED: 0.2,
         BOTTOM_PAD: 10,
         CLEAR_TIME: 3000,
@@ -2994,12 +2995,35 @@
         },
 
         /**
+         * Get available obstacle types based on config.
+         * @return {Array} Filtered obstacle types
+         */
+        getAvailableObstacleTypes: function () {
+            var availableTypes = Obstacle.types.slice(); // Copy array
+            
+            // Filter out birds if ADD_BIRDS is false
+            if (!Runner.config.ADD_BIRDS) {
+                availableTypes = availableTypes.filter(function(obstacle) {
+                    return obstacle.type !== 'PTERODACTYL';
+                });
+            }
+            
+            return availableTypes;
+        },
+
+        /**
          * Add a new obstacle.
          * @param {number} currentSpeed
          */
         addNewObstacle: function (currentSpeed) {
-            var obstacleTypeIndex = getRandomNum(0, Obstacle.types.length - 1);
-            var obstacleType = Obstacle.types[obstacleTypeIndex];
+            var availableTypes = this.getAvailableObstacleTypes();
+            
+            if (availableTypes.length === 0) {
+                return; // No obstacles available
+            }
+            
+            var obstacleTypeIndex = getRandomNum(0, availableTypes.length - 1);
+            var obstacleType = availableTypes[obstacleTypeIndex];
 
             // Check for multiples of the same type of obstacle.
             // Also check obstacle is available at current speed.
