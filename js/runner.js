@@ -776,14 +776,14 @@
             var mac = eventData.mac;
 
             switch (eventType) {
-                case 'connected':
-                    this.handleConnected(mac, eventData.name);
+                case 'startup':
+                    this.handleStartup(mac, eventData.name);
                     break;
                 case 'disconnected':
                     this.handleDisconnected(mac);
                     break;
                 case 'button':
-                    this.handleButton(mac, eventData.value);
+                    this.handleButton(mac, eventData.value, eventData.name);
                     break;
                 default:
                     console.warn('Unknown event type:', eventType);
@@ -791,11 +791,11 @@
         },
 
         /**
-         * Handle connected event - add a dino to the array.
+         * Handle startup event - add a dino to the array.
          * @param {string} mac MAC address of the device
          * @param {string} name Name of the device (optional)
          */
-        handleConnected: function (mac, name) {
+        handleStartup: function (mac, name) {
             // Don't add if dino already exists
             if (this.playerMap[mac]) {
                 return;
@@ -816,7 +816,7 @@
             this.playerMap[mac] = dino;
             this.lastButtonPresses[mac] = 0;
 
-            console.log('Dino connected:', mac, name || '');
+            console.log('Dino started:', mac, name || '');
         },
 
         /**
@@ -844,12 +844,16 @@
          * Handle button event - make the correct dino jump.
          * @param {string} mac MAC address of the device
          * @param {number} value Button press value (optional, for tracking)
+         * @param {string} name Name of the device (optional)
          */
-        handleButton: function (mac, value) {
+        handleButton: function (mac, value, name) {
             var dino = this.playerMap[mac];
+            
+            // If dino doesn't exist, create it first (auto-startup)
             if (!dino) {
-                console.warn('Button press from unknown dino:', mac);
-                return;
+                console.log('Button press from unknown dino, creating dino:', mac);
+                this.handleStartup(mac, name);
+                dino = this.playerMap[mac];
             }
 
             // Trigger jump if not already jumping or ducking
