@@ -1831,28 +1831,28 @@
             // No automatic respawn - user must press button to respawn (after 2 seconds)
         },
 
-        /**
-         * Respawn a dino in competitive mode.
-         * @param {Object} dino The dino to respawn
-         */
-        respawnDino: function (dino) {
-            dino.distanceRan = 0; // Reset counter to 0
-            // Reset xPos to original position
-            if (dino.originalXPos !== undefined) {
-                dino.xPos = dino.originalXPos;
-            }
-            // Reset dino animation properties
-            // Position will be set by state machine entry handler when transitioning to RESPAWNING_BLINKING
-            dino.jumpVelocity = 0;
-            dino.speedDrop = false;
-            dino.jumpCount = 0;
-            // Reset respawn animation state
-            dino.respawnStartTime = 0; // Will be set in updateRespawnBlinking
-            dino.respawnBlinkCount = 0;
-            dino.lastBlinkFrame = 0;
-            // Transition to RESPAWNING_BLINKING state - state machine will sync crashed, respawning, jumping, ducking properties
-            dino.update(0, Trex.status.RESPAWNING_BLINKING);
-        },
+        // /**
+        //  * Respawn a dino in competitive mode.
+        //  * @param {Object} dino The dino to respawn
+        //  */
+        // respawnDino: function (dino) {
+        //     dino.distanceRan = 0; // Reset counter to 0
+        //     // Reset xPos to original position
+        //     if (dino.originalXPos !== undefined) {
+        //         dino.xPos = dino.originalXPos;
+        //     }
+        //     // Reset dino animation properties
+        //     // Position will be set by state machine entry handler when transitioning to RESPAWNING_BLINKING
+        //     dino.jumpVelocity = 0;
+        //     dino.speedDrop = false;
+        //     dino.jumpCount = 0;
+        //     // Reset respawn animation state
+        //     dino.respawnStartTime = 0; // Will be set in updateRespawnBlinking
+        //     dino.respawnBlinkCount = 0;
+        //     dino.lastBlinkFrame = 0;
+        //     // Transition to RESPAWNING_BLINKING state - state machine will sync crashed, respawning, jumping, ducking properties
+        //     dino.update(0, Trex.status.RESPAWNING_BLINKING);
+        // },
 
         /**
          * Draw mode selection screen.

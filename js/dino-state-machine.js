@@ -638,10 +638,14 @@
             // RESPAWNING_FALLING: Ensure dino is above ground before falling
             this.entryHandlers[DinoState.RESPAWNING_FALLING] = function(newState, oldState, data) {
                 if (!self.dino) return;
+
+                self.dino.distanceRan = 0;
+
                 // If already on ground, transition directly to RUNNING
                 if (self.dino.yPos >= self.dino.groundYPos) {
                     self.dino.yPos = self.dino.groundYPos;
                     self.dino.jumpVelocity = 0;
+
                     Logger.debug('DINO_STATE_MACHINE', 'RESPAWNING_FALLING entry: Already on ground, transitioning to RUNNING');
                     self.transition(DinoState.RUNNING);
                     return;
