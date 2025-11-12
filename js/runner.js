@@ -1125,6 +1125,7 @@
          * @param {string} name Name of the device (optional)
          */
         handleButton: function (mac, value, name) {
+
             Logger.info('BUTTON_PRESS', 'handleButton() called from API', {
                 mac: mac,
                 name: name,
@@ -1140,6 +1141,8 @@
                 dinoState: dino && dino.stateMachine ? dino.stateMachine.getState() : 'N/A'
             });
             
+
+            
             // If dino doesn't exist, create it first (auto-startup)
             if (!dino) {
                 Logger.info('BUTTON_PRESS', 'Button press from unknown dino, creating dino: ' + mac);
@@ -1149,6 +1152,11 @@
                     mac: mac,
                     hasDino: !!dino
                 });
+            }
+            else
+            {
+                
+                dino.name = name || dino.name; // Update name if provided
             }
 
             // Get current state BEFORE any transitions to prevent double-processing
