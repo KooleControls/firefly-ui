@@ -10,9 +10,10 @@
      * T-rex game character.
      * @param {HTMLCanvas} canvas
      * @param {Object} spritePos Positioning within image sprite.
+     * @param {string} opt_gameMode Optional game mode ('collective' or 'competitive')
      * @constructor
      */
-    function Trex(canvas, spritePos) {
+    function Trex(canvas, spritePos, opt_gameMode) {
         this.canvas = canvas;
         this.canvasCtx = canvas.getContext('2d');
         this.spritePos = spritePos;
@@ -28,7 +29,7 @@
         this.timer = 0;
         this.msPerFrame = 1000 / FPS;
         this.config = Trex.config;
-        // Current status.
+        // Current status (legacy - kept for backward compatibility)
         this.status = Trex.status.WAITING;
 
         this.jumping = false;
@@ -45,6 +46,14 @@
         this.respawnStartTime = 0;
         this.respawnBlinkDelay = 200; // Time between blinks in ms
         this.respawnFallTriggered = false; // Whether button was pressed to trigger fall
+
+        // Initialize dino state machine
+        var gameMode = opt_gameMode || DinoGameMode.COLLECTIVE;
+        Logger.info('TREX', 'Creating dino with game mode: ' + gameMode);
+        this.stateMachine = new DinoStateMachine(gameMode, this);
+        Logger.debug('TREX', 'State machine created, transitioning to WAITING');
+        this.stateMachine.transition(DinoState.WAITING);
+        Logger.debug('TREX', 'Dino initialized. State machine state: ' + this.stateMachine.getState());
 
         this.init();
     }
@@ -153,6 +162,44 @@
         },
 
         /**
+         * Convert Trex.status to DinoState
+         * @param {string} trexStatus
+         * @return {string|null}
+         */
+        getDinoStateFromTrexStatus: function(trexStatus) {
+            Logger.debug('TREX', 'getDinoStateFromTrexStatus() called', {
+                trexStatus: trexStatus,
+                hasDinoState: !!window.DinoState,
+                availableStates: window.DinoState ? Object.keys(window.DinoState) : 'N/A'
+            });
+            if (!trexStatus || !window.DinoState) {
+                Logger.warn('TREX', 'Missing trexStatus or DinoState', {
+                    trexStatus: trexStatus,
+                    hasDinoState: !!window.DinoState
+                });
+                return null;
+            }
+            // Trex.status and DinoState should match
+            var result = window.DinoState[trexStatus] || null;
+            Logger.debug('TREX', 'Conversion result', {
+                trexStatus: trexStatus,
+                dinoState: result,
+                availableKeys: Object.keys(window.DinoState)
+            });
+            return result;
+        },
+
+        /**
+         * Set game mode for the state machine
+         * @param {string} gameMode
+         */
+        setGameMode: function(gameMode) {
+            if (this.stateMachine) {
+                this.stateMachine.setGameMode(gameMode);
+            }
+        },
+
+        /**
          * Setter for the jump velocity.
          * The approriate drop velocity is also set.
          */
@@ -169,7 +216,30 @@
         update: function (deltaTime, opt_status) {
             this.timer += deltaTime;
 
-            // Update the status.
+            // Update the status using state machine if available
+            if (opt_status && this.stateMachine) {
+                Logger.debug('TREX', 'update() called with status: ' + opt_status);
+                // Convert Trex.status to DinoState and transition
+                var dinoState = this.getDinoStateFromTrexStatus(opt_status);
+                Logger.debug('TREX', 'Converted Trex.status to DinoState', {
+                    trexStatus: opt_status,
+                    dinoState: dinoState,
+                    hasStateMachine: !!this.stateMachine
+                });
+                if (dinoState) {
+                    Logger.debug('TREX', 'Transitioning state machine to: ' + dinoState);
+                    this.stateMachine.transition(dinoState);
+                } else {
+                    Logger.warn('TREX', 'Could not convert Trex.status to DinoState: ' + opt_status);
+                }
+            } else if (opt_status) {
+                Logger.warn('TREX', 'update() called with status but no state machine', {
+                    status: opt_status,
+                    hasStateMachine: !!this.stateMachine
+                });
+            }
+
+            // Update the status (legacy support)
             if (opt_status) {
                 this.status = opt_status;
                 this.currentFrame = 0;
@@ -362,13 +432,31 @@
          * @param {number} speed
          */
         startJump: function (speed) {
+            Logger.info('BUTTON_PRESS', 'startJump() called', {
+                speed: speed,
+                currentState: this.stateMachine ? this.stateMachine.getState() : 'N/A',
+                jumping: this.jumping,
+                ducking: this.ducking,
+                status: this.status,
+                yPos: this.yPos,
+                groundYPos: this.groundYPos
+            });
             if (!this.jumping) {
+                Logger.debug('TREX', 'Starting jump - calling update with JUMPING status');
                 this.update(0, Trex.status.JUMPING);
                 // Tweak the jump velocity based on the speed.
                 this.jumpVelocity = this.config.INIITAL_JUMP_VELOCITY - (speed / 10);
                 this.jumping = true;
                 this.reachedMinHeight = false;
                 this.speedDrop = false;
+                Logger.info('BUTTON_PRESS', 'Jump started successfully', {
+                    jumpVelocity: this.jumpVelocity,
+                    jumping: this.jumping,
+                    stateAfterJump: this.stateMachine ? this.stateMachine.getState() : 'N/A',
+                    statusAfterJump: this.status
+                });
+            } else {
+                Logger.debug('TREX', 'Jump NOT started - already jumping');
             }
         },
 

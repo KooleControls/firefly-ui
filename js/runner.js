@@ -55,6 +55,10 @@
 
         this.obstacles = [];
 
+        // State machine for managing game states
+        this.stateMachine = new StateMachine();
+        
+        // Legacy boolean flags (kept for backward compatibility, but should use stateMachine)
         this.activated = false; // Whether the easter egg has been activated.
         this.playing = false; // Whether the game is currently in play state.
         this.crashed = false;
@@ -66,6 +70,9 @@
         // Game mode: 'collective' or 'competitive'
         this.gameMode = null; // Will be set by user selection
         this.waitingForModeSelection = true; // Whether we're waiting for mode selection
+        
+        // Initialize state machine listeners
+        this.setupStateMachineListeners();
 
         this.playCount = 0;
 
@@ -88,6 +95,52 @@
     }
 
     Runner.prototype = {
+        /**
+         * Setup state machine listeners to sync with legacy boolean flags
+         */
+        setupStateMachineListeners: function() {
+            var self = this;
+            
+            // Listen to all state changes to keep legacy flags in sync
+            this.stateMachine.onStateChange('*', function(newState, oldState) {
+                // Update legacy flags based on state
+                switch(newState) {
+                    case GameState.INITIALIZED:
+                        self.activated = false;
+                        self.playing = false;
+                        self.crashed = false;
+                        self.paused = false;
+                        break;
+                    case GameState.MODE_SELECTION:
+                        self.waitingForModeSelection = true;
+                        self.playing = false;
+                        self.paused = false;
+                        break;
+                    case GameState.INTRO:
+                        self.activated = true;
+                        self.playing = true;
+                        self.playingIntro = true;
+                        break;
+                    case GameState.PLAYING:
+                        self.playing = true;
+                        self.paused = false;
+                        self.crashed = false;
+                        self.playingIntro = false;
+                        break;
+                    case GameState.PAUSED:
+                        self.paused = true;
+                        self.playing = false;
+                        break;
+                    case GameState.GAME_OVER:
+                    case GameState.CRASHED:
+                        self.crashed = true;
+                        self.playing = false;
+                        self.paused = true;
+                        break;
+                }
+            });
+        },
+        
         /**
          * Whether the easter egg has been disabled. CrOS enterprise enrolled devices.
          * @return {boolean}
@@ -250,15 +303,15 @@
 
             // Load sounds but don't start game yet - wait for mode selection
             this.loadSounds();
-            this.playing = false;
-            this.activated = false;
-            this.playingIntro = false;
             
             // Set container to full width and height immediately (skip intro animation)
             this.containerEl.style.width = this.dimensions.WIDTH + 'px';
             this.containerEl.style.height = this.dimensions.HEIGHT + 'px';
             this.setArcadeMode();
 
+            // Initialize state machine to MODE_SELECTION
+            this.stateMachine.transition(GameState.MODE_SELECTION);
+            
             this.startListening();
             // Show mode selection screen
             this.showModeSelection();
@@ -345,8 +398,13 @@
          */
         playIntro: function () {
             if (!this.activated && !this.crashed) {
+                // Transition to INTRO state
+                this.stateMachine.transition(GameState.INTRO);
+                
                 this.playingIntro = true;
-                this.tRex.playingIntro = true;
+                if (this.tRex) {
+                    this.tRex.playingIntro = true;
+                }
 
                 // CSS animation definition.
                 var keyframes = '@-webkit-keyframes intro { ' +
@@ -369,8 +427,6 @@
                 // if (this.touchController) {
                 //     this.outerContainerEl.appendChild(this.touchController);
                 // }
-                this.playing = true;
-                this.activated = true;
             } else if (this.crashed) {
                 this.restart();
             }
@@ -381,10 +437,15 @@
          * Update the game status to started.
          */
         startGame: function () {
+            // Transition to PLAYING state
+            this.stateMachine.transition(GameState.PLAYING);
+            
             this.setArcadeMode();
             this.runningTime = 0;
             this.playingIntro = false;
-            this.tRex.playingIntro = false;
+            if (this.tRex) {
+                this.tRex.playingIntro = false;
+            }
             this.containerEl.style.webkitAnimation = '';
             this.playCount++;
 
@@ -428,8 +489,8 @@
                 // Update all dinos
                 for (var i = 0; i < this.tRexes.length; i++) {
                     var dino = this.tRexes[i];
-                    // Skip crashed dinos in competitive mode for jumping updates
-                    if (this.gameMode === 'competitive' && dino.crashed) {
+                    // Use state machine's canUpdate method (game mode aware)
+                    if (dino.stateMachine && !dino.stateMachine.canUpdate()) {
                         continue;
                     }
                     // Skip respawning dinos - they have their own animation
@@ -618,6 +679,8 @@
          * Bind relevant key / mouse / touch listeners.
          */
         startListening: function () {
+            Logger.debug('RUNNER', 'startListening() called - setting up event listeners');
+            
             // Keys.
             // Add listeners to both document and window to ensure we catch keydown events
             document.addEventListener(RunnerGlobal.events.KEYDOWN, this);
@@ -625,9 +688,16 @@
             window.addEventListener(RunnerGlobal.events.KEYDOWN, this);
             window.addEventListener(RunnerGlobal.events.KEYUP, this);
             
+            Logger.debug('RUNNER', 'Added keydown/keyup listeners to document and window');
+            
             // Also add a direct listener to ensure keydown events are captured
             var self = this;
             var directHandler = function(e) {
+                Logger.debug('BUTTON_PRESS', 'Direct keydown handler triggered', {
+                    keyCode: e.keyCode,
+                    key: e.key,
+                    waitingForModeSelection: self.waitingForModeSelection
+                });
                 if (self.waitingForModeSelection) {
                     self.onKeyDown(e);
                 }
@@ -635,6 +705,8 @@
             document.addEventListener('keydown', directHandler);
             window.addEventListener('keydown', directHandler);
             this.directKeyHandler = directHandler; // Store reference for cleanup
+            
+            Logger.debug('RUNNER', 'Added direct keydown handlers');
 
             if (IS_MOBILE) {
                 // Mobile only touch devices.
@@ -680,50 +752,85 @@
         startApiPolling: function () {
             var self = this;
             
+            Logger.info('API', 'startApiPolling() called', {
+                apiUrl: this.apiUrl,
+                hasEventSource: !!this.eventSource,
+                hasFetchStreamReader: !!this.fetchStreamReader
+            });
+            
             // Close existing connection if any
             if (this.eventSource) {
+                Logger.debug('API', 'Closing existing EventSource connection');
                 this.eventSource.close();
             }
             
             // Try EventSource first (Server-Sent Events)
             try {
+                Logger.info('API', 'Attempting to create EventSource connection to: ' + this.apiUrl);
                 this.eventSource = new EventSource(this.apiUrl);
+                Logger.info('API', 'EventSource created successfully');
                 
                 this.eventSource.onmessage = function(event) {
+                    Logger.debug('API', 'EventSource message received', {
+                        rawData: event.data,
+                        type: event.type
+                    });
                     try {
                         // Handle both direct JSON and stringified JSON
                         var data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+                        Logger.debug('API', 'Parsed event data', data);
                         // New format: single object with event type
                         if (data && data.event && data.mac) {
+                            Logger.info('API', 'Valid event received, calling handleEvent', {
+                                event: data.event,
+                                mac: data.mac,
+                                name: data.name,
+                                value: data.value
+                            });
                             self.handleEvent(data);
+                        } else {
+                            Logger.warn('API', 'Invalid event format (missing event or mac)', data);
                         }
                     } catch (e) {
-                        console.error('Error parsing event data:', e, event.data);
+                        Logger.error('API', 'Error parsing event data', { error: e, data: event.data });
                     }
                 };
                 
                 // Also handle custom event types if the server uses them
                 this.eventSource.addEventListener('message', function(event) {
+                    Logger.debug('API', 'EventSource custom message event received', {
+                        rawData: event.data,
+                        type: event.type
+                    });
                     try {
                         var data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+                        Logger.debug('API', 'Parsed custom event data', data);
                         // New format: single object with event type
                         if (data && data.event && data.mac) {
+                            Logger.info('API', 'Valid custom event received, calling handleEvent', {
+                                event: data.event,
+                                mac: data.mac,
+                                name: data.name,
+                                value: data.value
+                            });
                             self.handleEvent(data);
+                        } else {
+                            Logger.warn('API', 'Invalid custom event format (missing event or mac)', data);
                         }
                     } catch (e) {
-                        console.error('Error parsing custom event data:', e);
+                        Logger.error('API', 'Error parsing custom event data', { error: e });
                     }
                 });
                 
                 this.eventSource.onerror = function(error) {
-                    console.error('EventSource error:', error);
+                    Logger.error('API', 'EventSource error', { error: error });
                     // Fallback to fetch stream if EventSource fails
                     self.eventSource.close();
                     self.startFetchStream();
                 };
             } catch (e) {
                 // If EventSource not supported or fails, use fetch stream
-                console.log('EventSource not available, using fetch stream');
+                Logger.warn('API', 'EventSource not available, using fetch stream', { error: e });
                 this.startFetchStream();
             }
         },
@@ -735,23 +842,37 @@
             var self = this;
             var buffer = '';
             
+            Logger.info('API', 'startFetchStream() called', {
+                apiUrl: this.apiUrl,
+                hasFetchStreamReader: !!this.fetchStreamReader
+            });
+            
             // Close existing stream if any
             if (this.fetchStreamReader) {
+                Logger.debug('API', 'Cancelling existing fetch stream reader');
                 this.fetchStreamReader.cancel();
                 this.fetchStreamReader = null;
             }
             
             function readStream() {
                 if (!self.fetchStreamReader) {
+                    Logger.info('API', 'Starting fetch request to: ' + self.apiUrl);
                     fetch(self.apiUrl)
                         .then(function(response) {
+                            Logger.debug('API', 'Fetch response received', {
+                                ok: response.ok,
+                                status: response.status,
+                                hasBody: !!response.body
+                            });
                             if (!response.ok) {
                                 throw new Error('Network response was not ok');
                             }
                             if (!response.body) {
                                 throw new Error('Streaming not supported');
                             }
+                            Logger.debug('API', 'Getting stream reader');
                             self.fetchStreamReader = response.body.getReader();
+                            Logger.info('API', 'Stream reader obtained, starting to read');
                             var reader = self.fetchStreamReader;
                             var decoder = new TextDecoder();
                             
@@ -777,21 +898,40 @@
                                     for (var i = 0; i < lines.length; i++) {
                                         var line = lines[i].trim();
                                         if (line) {
+                                            Logger.debug('API', 'Fetch stream - processing line: ' + line);
                                             try {
                                                 var data = JSON.parse(line);
+                                                Logger.debug('API', 'Fetch stream - parsed data', data);
                                                 // New format: single object with event type
                                                 if (data && data.event && data.mac) {
+                                                    Logger.info('API', 'Fetch stream - valid event, calling handleEvent', {
+                                                        event: data.event,
+                                                        mac: data.mac,
+                                                        name: data.name,
+                                                        value: data.value
+                                                    });
                                                     self.handleEvent(data);
+                                                } else {
+                                                    Logger.warn('API', 'Fetch stream - invalid event format', data);
                                                 }
                                             } catch (e) {
+                                                Logger.debug('API', 'Fetch stream - line parse failed, trying buffer: ' + e.message);
                                                 // Might be partial JSON, try to parse the whole buffer
                                                 try {
                                                     var fullData = JSON.parse(buffer + line);
+                                                    Logger.debug('API', 'Fetch stream - parsed from buffer', fullData);
                                                     if (fullData && fullData.event && fullData.mac) {
+                                                        Logger.info('API', 'Fetch stream - valid event from buffer, calling handleEvent', {
+                                                            event: fullData.event,
+                                                            mac: fullData.mac,
+                                                            name: fullData.name,
+                                                            value: fullData.value
+                                                        });
                                                         self.handleEvent(fullData);
                                                         buffer = '';
                                                     }
                                                 } catch (e2) {
+                                                    Logger.debug('API', 'Fetch stream - buffer parse also failed, keeping in buffer');
                                                     // Still partial, keep in buffer
                                                 }
                                             }
@@ -800,20 +940,29 @@
                                     
                                     // Also try to parse the remaining buffer as complete JSON
                                     if (buffer.trim()) {
+                                        Logger.debug('API', 'Fetch stream - trying to parse remaining buffer: ' + buffer.trim());
                                         try {
                                             var completeData = JSON.parse(buffer.trim());
+                                            Logger.debug('API', 'Fetch stream - parsed buffer data', completeData);
                                             if (completeData && completeData.event && completeData.mac) {
+                                                Logger.info('API', 'Fetch stream - valid event from buffer, calling handleEvent', {
+                                                    event: completeData.event,
+                                                    mac: completeData.mac,
+                                                    name: completeData.name,
+                                                    value: completeData.value
+                                                });
                                                 self.handleEvent(completeData);
                                                 buffer = '';
                                             }
                                         } catch (e) {
+                                            Logger.debug('API', 'Fetch stream - buffer still incomplete, keeping: ' + e.message);
                                             // Still incomplete, keep in buffer
                                         }
                                     }
                                     
                                     return pump();
                                 }).catch(function(error) {
-                                    console.error('Stream read error:', error);
+                                    Logger.error('API', 'Stream read error', { error: error });
                                     // Reconnect after error
                                     self.fetchStreamReader = null;
                                     setTimeout(function() {
@@ -825,7 +974,7 @@
                             return pump();
                         })
                         .catch(function(error) {
-                            console.error('Error starting fetch stream:', error);
+                            Logger.error('API', 'Error starting fetch stream', { error: error });
                             // Retry after delay
                             setTimeout(function() {
                                 self.startFetchStream();
@@ -842,25 +991,41 @@
          * @param {Object} eventData Event object with mac, event, name, and value
          */
         handleEvent: function (eventData) {
+            Logger.debug('API', 'handleEvent() called with', eventData);
+            
             if (!eventData || !eventData.event || !eventData.mac) {
+                Logger.warn('API', 'handleEvent() - Invalid event data (missing event or mac)', eventData);
                 return;
             }
 
             var eventType = eventData.event;
             var mac = eventData.mac;
+            var name = eventData.name;
+            var value = eventData.value;
+
+            Logger.info('API', 'Processing event', {
+                type: eventType,
+                mac: mac,
+                name: name,
+                value: value,
+                timestamp: new Date().toISOString()
+            });
 
             switch (eventType) {
                 case 'startup':
-                    this.handleStartup(mac, eventData.name);
+                    Logger.info('API', 'Event type: STARTUP');
+                    this.handleStartup(mac, name);
                     break;
                 case 'disconnected':
+                    Logger.info('API', 'Event type: DISCONNECTED');
                     this.handleDisconnected(mac);
                     break;
                 case 'button':
-                    this.handleButton(mac, eventData.value, eventData.name);
+                    Logger.info('API', 'Event type: BUTTON PRESS - calling handleButton()');
+                    this.handleButton(mac, value, name);
                     break;
                 default:
-                    console.warn('Unknown event type:', eventType);
+                    Logger.warn('API', 'Unknown event type: ' + eventType + ' for MAC: ' + mac);
             }
         },
 
@@ -875,7 +1040,8 @@
                 return;
             }
 
-            var dino = new Trex(this.canvas, this.spriteDef.TREX);
+            // Create dino with game mode
+            var dino = new Trex(this.canvas, this.spriteDef.TREX, this.gameMode);
             // All dinos start at the same x position (they share the track)
             // Small offset for visual distinction
             var offset = this.tRexes.length * 2;
@@ -892,7 +1058,7 @@
             this.playerMap[mac] = dino;
             this.lastButtonPresses[mac] = 0;
 
-            console.log('Dino started:', mac, name || '');
+            Logger.info('API', 'Dino started: ' + mac + (name ? ' (' + name + ')' : ''));
         },
 
         /**
@@ -913,7 +1079,7 @@
             delete this.playerMap[mac];
             delete this.lastButtonPresses[mac];
 
-            console.log('Dino disconnected:', mac);
+            Logger.info('API', 'Dino disconnected: ' + mac);
         },
 
         /**
@@ -923,19 +1089,43 @@
          * @param {string} name Name of the device (optional)
          */
         handleButton: function (mac, value, name) {
+            Logger.info('BUTTON_PRESS', 'handleButton() called from API', {
+                mac: mac,
+                name: name,
+                value: value,
+                timestamp: new Date().toISOString()
+            });
+            
             var dino = this.playerMap[mac];
+            Logger.debug('BUTTON_PRESS', 'Button press - dino lookup', {
+                mac: mac,
+                hasDino: !!dino,
+                dinoName: dino ? dino.name : 'N/A',
+                dinoState: dino && dino.stateMachine ? dino.stateMachine.getState() : 'N/A'
+            });
             
             // If dino doesn't exist, create it first (auto-startup)
             if (!dino) {
-                console.log('Button press from unknown dino, creating dino:', mac);
+                Logger.info('BUTTON_PRESS', 'Button press from unknown dino, creating dino: ' + mac);
                 this.handleStartup(mac, name);
                 dino = this.playerMap[mac];
+                Logger.info('BUTTON_PRESS', 'Dino created after button press', {
+                    mac: mac,
+                    hasDino: !!dino
+                });
             }
 
             // If dino is respawning, trigger fall instead of jump
             if (dino && (dino.respawning || dino.status === Trex.status.RESPAWNING)) {
+                Logger.info('BUTTON_PRESS', 'Button press during respawn - triggering fall', {
+                    mac: mac,
+                    respawning: dino.respawning,
+                    status: dino.status,
+                    respawnFallTriggered: dino.respawnFallTriggered
+                });
                 if (!dino.respawnFallTriggered) {
                     dino.respawnFallTriggered = true;
+                    Logger.info('BUTTON_PRESS', 'Respawn fall triggered');
                     if (this.soundFx && this.soundFx.BUTTON_PRESS) {
                         this.playSound(this.soundFx.BUTTON_PRESS);
                     }
@@ -944,16 +1134,46 @@
             }
 
             // Trigger jump if not already jumping or ducking
+            Logger.debug('BUTTON_PRESS', 'Button press - checking jump conditions', {
+                mac: mac,
+                hasDino: !!dino,
+                jumping: dino ? dino.jumping : 'N/A',
+                ducking: dino ? dino.ducking : 'N/A',
+                canJump: dino && !dino.jumping && !dino.ducking
+            });
+            
             if (dino && !dino.jumping && !dino.ducking) {
+                Logger.info('BUTTON_PRESS', 'Button press - JUMP TRIGGERED', {
+                    mac: mac,
+                    name: name,
+                    speed: this.currentSpeed,
+                    dinoState: dino.stateMachine ? dino.stateMachine.getState() : 'N/A'
+                });
                 if (this.soundFx && this.soundFx.BUTTON_PRESS) {
                     this.playSound(this.soundFx.BUTTON_PRESS);
                 }
                 dino.startJump(this.currentSpeed);
+                Logger.info('BUTTON_PRESS', 'Button press - jump started, dino state after', {
+                    mac: mac,
+                    jumping: dino.jumping,
+                    state: dino.stateMachine ? dino.stateMachine.getState() : 'N/A'
+                });
+            } else {
+                Logger.debug('BUTTON_PRESS', 'Button press - jump NOT triggered', {
+                    mac: mac,
+                    reason: !dino ? 'No dino' : (dino.jumping ? 'Already jumping' : 'Ducking')
+                });
             }
 
             // Update last button press value if provided
             if (value !== undefined) {
+                var oldValue = this.lastButtonPresses[mac];
                 this.lastButtonPresses[mac] = value;
+                Logger.debug('BUTTON_PRESS', 'Button press value updated', {
+                    mac: mac,
+                    oldValue: oldValue,
+                    newValue: value
+                });
             }
         },
 
@@ -975,7 +1195,8 @@
 
                 // Create dino if it doesn't exist
                 if (!this.playerMap[mac]) {
-                    var dino = new Trex(this.canvas, this.spriteDef.TREX);
+                    // Create dino with game mode
+                    var dino = new Trex(this.canvas, this.spriteDef.TREX, this.gameMode);
                     // All dinos start at the same x position (they share the track)
                     // Small offset for visual distinction (optional - can be removed if you want them overlapping)
                     dino.xPos = Trex.config.START_X_POS + (i * 2); // 2px offset per dino
@@ -993,14 +1214,51 @@
 
                 // Check if button presses increased (button was pressed)
                 var lastPresses = this.lastButtonPresses[mac] || 0;
+            Logger.debug('BUTTON_PRESS', 'Checking button press for player', {
+                mac: mac,
+                name: player.name,
+                buttonPresses: buttonPresses,
+                lastPresses: lastPresses,
+                increased: buttonPresses > lastPresses
+            });
+                
                 if (buttonPresses > lastPresses) {
                     var dino = this.playerMap[mac];
+                    Logger.info('BUTTON_PRESS', 'Button press detected! Triggering jump', {
+                        mac: mac,
+                        name: player.name,
+                        buttonPresses: buttonPresses,
+                        lastPresses: lastPresses,
+                        hasDino: !!dino,
+                        dinoJumping: dino ? dino.jumping : 'N/A',
+                        dinoDucking: dino ? dino.ducking : 'N/A',
+                        dinoState: dino && dino.stateMachine ? dino.stateMachine.getState() : 'N/A',
+                        currentSpeed: this.currentSpeed
+                    });
+                    
                     // Trigger jump if not already jumping
                     if (dino && !dino.jumping && !dino.ducking) {
+                        Logger.info('BUTTON_PRESS', 'Starting jump for dino', {
+                            mac: mac,
+                            name: player.name,
+                            speed: this.currentSpeed
+                        });
                         if (this.soundFx && this.soundFx.BUTTON_PRESS) {
                             this.playSound(this.soundFx.BUTTON_PRESS);
                         }
                         dino.startJump(this.currentSpeed);
+                        Logger.info('BUTTON_PRESS', 'Jump started. Dino state after jump', {
+                            mac: mac,
+                            jumping: dino.jumping,
+                            state: dino.stateMachine ? dino.stateMachine.getState() : 'N/A'
+                        });
+                    } else {
+                        Logger.debug('BUTTON_PRESS', 'Jump NOT triggered - dino conditions not met', {
+                            mac: mac,
+                            hasDino: !!dino,
+                            jumping: dino ? dino.jumping : false,
+                            ducking: dino ? dino.ducking : false
+                        });
                     }
                     this.lastButtonPresses[mac] = buttonPresses;
                 }
@@ -1027,9 +1285,22 @@
          * @param {Event} e
          */
         onKeyDown: function (e) {
+            Logger.debug('BUTTON_PRESS', 'onKeyDown() called', {
+                keyCode: e.keyCode,
+                key: e.key,
+                code: e.code,
+                type: e.type,
+                target: e.target,
+                waitingForModeSelection: this.waitingForModeSelection,
+                playing: this.playing,
+                crashed: this.crashed,
+                gameMode: this.gameMode
+            });
+
             // Prevent native page scrolling whilst tapping on mobile.
             if (IS_MOBILE && this.playing) {
                 e.preventDefault();
+                Logger.debug('RUNNER', 'Prevented default (mobile)');
             }
 
             // Handle game mode selection
@@ -1037,15 +1308,28 @@
                 var keyCode = String(e.keyCode);
                 var key = e.key || e.code || '';
                 
+                Logger.debug('BUTTON_PRESS', 'Mode selection - checking key', {
+                    keyCode: keyCode,
+                    key: key,
+                    keyCodeStr: keyCode
+                });
+                
                 // Check both keyCode and key for better compatibility
                 if (keyCode === '49' || keyCode === '97' || key === '1' || key === 'Digit1') { // Key '1'
+                    Logger.info('BUTTON_PRESS', 'Button press: Selecting COLLECTIVE mode');
                     this.selectGameMode('collective');
                     e.preventDefault();
                     return;
                 } else if (keyCode === '50' || keyCode === '98' || key === '2' || key === 'Digit2') { // Key '2'
+                    Logger.info('BUTTON_PRESS', 'Button press: Selecting COMPETITIVE mode');
                     this.selectGameMode('competitive');
                     e.preventDefault();
                     return;
+                } else {
+                    Logger.debug('BUTTON_PRESS', 'Mode selection - key not recognized', {
+                        keyCode: keyCode,
+                        key: key
+                    });
                 }
             }
 
@@ -1055,6 +1339,7 @@
 
                 if (this.crashed && e.type == RunnerGlobal.events.TOUCHSTART &&
                     e.currentTarget == this.containerEl) {
+                    Logger.info('BUTTON_PRESS', 'Button press: Restarting game (touch on crash)');
                     this.restart();
                 }
             }
@@ -1117,11 +1402,13 @@
          * Game over state.
          */
         gameOver: function () {
+            // Transition to GAME_OVER state
+            this.stateMachine.transition(GameState.GAME_OVER);
+            
             this.playSound(this.soundFx.HIT);
             vibrate(200);
 
             this.stop();
-            this.crashed = true;
             this.distanceMeter.acheivement = false;
 
             // Update all dinos to crashed state
@@ -1155,8 +1442,12 @@
         },
 
         stop: function () {
-            this.playing = false;
-            this.paused = true;
+            // Only transition to PAUSED if we're currently playing
+            if (this.stateMachine.isState(GameState.PLAYING) || 
+                this.stateMachine.isState(GameState.INTRO)) {
+                this.stateMachine.transition(GameState.PAUSED);
+            }
+            
             cancelAnimationFrame(this.raqId);
             this.raqId = 0;
             // Keep API streaming running so we can detect new players
@@ -1165,8 +1456,9 @@
 
         play: function () {
             if (!this.crashed) {
-                this.playing = true;
-                this.paused = false;
+                // Transition to PLAYING state
+                this.stateMachine.transition(GameState.PLAYING);
+                
                 // Restart API streaming if it was stopped
                 if (!this.eventSource && !this.fetchStreamReader) {
                     this.startApiPolling();
@@ -1182,10 +1474,11 @@
 
         restart: function () {
             if (!this.raqId) {
+                // Transition to PLAYING state
+                this.stateMachine.transition(GameState.PLAYING);
+                
                 this.playCount++;
                 this.runningTime = 0;
-                this.playing = true;
-                this.crashed = false;
                 // distanceRan removed - tracking per dino now
                 this.setSpeed(this.config.SPEED);
                 this.time = getTimeStamp();
@@ -1316,6 +1609,9 @@
          * Show game mode selection screen.
          */
         showModeSelection: function () {
+            // Transition to MODE_SELECTION state
+            this.stateMachine.transition(GameState.MODE_SELECTION);
+            
             // Mode selection will be drawn in the update loop
             this.modeSelectionPanel = {
                 visible: true
@@ -1331,8 +1627,17 @@
             this.waitingForModeSelection = false;
             this.modeSelectionPanel = null;
             
+            // Update all existing dinos' state machines with the new game mode
+            for (var i = 0; i < this.tRexes.length; i++) {
+                if (this.tRexes[i].setGameMode) {
+                    this.tRexes[i].setGameMode(mode);
+                }
+            }
+            
+            // Transition to PLAYING state when mode is selected
+            this.stateMachine.transition(GameState.PLAYING);
+            
             // Start the game
-            this.playing = true;
             this.activated = true;
             this.startApiPolling();
         },
