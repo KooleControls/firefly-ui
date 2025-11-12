@@ -1079,8 +1079,8 @@
             // Create dino with game mode
             var dino = new Trex(this.canvas, this.spriteDef.TREX, this.gameMode);
             // All dinos start at the same x position (they share the track)
-            // Small offset for visual distinction
-            var offset = this.tRexes.length * 2;
+            // Offset for visual distinction - spread dinos out more
+            var offset = this.tRexes.length * 8;
             dino.xPos = Trex.config.START_X_POS + offset;
             dino.originalXPos = dino.xPos; // Store original xPos for respawn
             // Initialize score tracking for this dino
@@ -1088,8 +1088,8 @@
             dino.mac = mac; // Store MAC for reference
             dino.name = name || mac; // Store name if provided
             // State properties (crashed, respawning, jumping, ducking) are managed by state machine
-            // Start dino in running state - state machine will sync all properties
-            dino.update(0, Trex.status.RUNNING);
+            // Start dino in waiting state - state machine will sync all properties
+            dino.update(0, Trex.status.WAITING);
             this.tRexes.push(dino);
             this.playerMap[mac] = dino;
             this.lastButtonPresses[mac] = 0;
@@ -1307,6 +1307,29 @@
                     stateMachineState: dino.stateMachine.getState()
                 });
                 return; // Don't process as jump during respawn
+            }
+
+            // If dino is waiting, transition to running on first button press
+            if (dino && dino.stateMachine && currentState === DinoState.WAITING) {
+                console.log('[BUTTON_PRESS] Button press received during WAITING state - transitioning to RUNNING', {
+                    mac: mac,
+                    status: dino.status,
+                    stateMachineState: currentState,
+                    xPos: dino.xPos,
+                    yPos: dino.yPos,
+                    groundYPos: dino.groundYPos,
+                    timestamp: new Date().toISOString()
+                });
+                Logger.info('BUTTON_PRESS', 'Button press during waiting - transitioning to running', {
+                    mac: mac,
+                    status: dino.status,
+                    stateMachineState: currentState
+                });
+                dino.update(0, Trex.status.RUNNING);
+                if (this.soundFx && this.soundFx.BUTTON_PRESS) {
+                    this.playSound(this.soundFx.BUTTON_PRESS);
+                }
+                return; // Don't process as jump - wait for next button press
             }
 
             // Trigger jump if not already jumping or ducking

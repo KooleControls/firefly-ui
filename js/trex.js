@@ -308,6 +308,10 @@
             sourceX += this.spritePos.x;
             sourceY += this.spritePos.y;
 
+            // Save context state and apply transparency
+            this.canvasCtx.save();
+            this.canvasCtx.globalAlpha = 0.85; // Make dino slightly transparent
+
             // Ducking.
             if (this.ducking && this.status != Trex.status.CRASHED) {
                 this.canvasCtx.drawImage(window.Runner.imageSprite, sourceX, sourceY,
@@ -325,6 +329,9 @@
                     this.xPos, this.yPos,
                     this.config.WIDTH, this.config.HEIGHT);
             }
+
+            // Restore context state
+            this.canvasCtx.restore();
         },
 
         /**
