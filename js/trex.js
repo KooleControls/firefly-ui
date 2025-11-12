@@ -46,6 +46,7 @@
         this.respawnStartTime = 0;
         this.respawnBlinkDelay = 200; // Time between blinks in ms
         this.respawnFallTriggered = false; // Whether button was pressed to trigger fall
+        this.crashTime = 0; // Timestamp when dino crashed (0 = not crashed)
 
         // Initialize dino state machine
         var gameMode = opt_gameMode || DinoGameMode.COLLECTIVE;
@@ -291,7 +292,11 @@
             }
 
             // Speed drop becomes duck if the down key is still being pressed.
-            if (this.speedDrop && this.yPos == this.groundYPos) {
+            if (this.speedDrop && this.stateMachine && this.stateMachine.isGrounded()) {
+                this.speedDrop = false;
+                this.setDuck(true);
+            } else if (this.speedDrop && !this.stateMachine && this.yPos == this.groundYPos) {
+                // Fallback for legacy code without state machine
                 this.speedDrop = false;
                 this.setDuck(true);
             }
@@ -378,9 +383,25 @@
                 this.respawnBlinkCount = 0;
                 // Position dino above ground (float height)
                 var floatHeight = 50; // Pixels above ground
-                this.yPos = this.groundYPos - floatHeight;
+                var newYPos = this.groundYPos - floatHeight;
+                console.log('[RESPAWN_BLINKING] Positioning dino above ground', {
+                    oldYPos: this.yPos,
+                    newYPos: newYPos,
+                    groundYPos: this.groundYPos,
+                    floatHeight: floatHeight,
+                    xPos: this.xPos
+                });
+                this.yPos = newYPos;
                 this.jumpVelocity = 0; // Keep it floating
             }
+            
+            // Log position every frame for debugging (will be noisy but helpful)
+            console.log('[RESPAWN_BLINKING] Position update', {
+                xPos: this.xPos,
+                yPos: this.yPos,
+                groundYPos: this.groundYPos,
+                status: this.status
+            });
 
             var elapsedTime = currentTime - this.respawnStartTime;
             var blinkInterval = this.respawnBlinkDelay * 2; // Time for one complete blink (open + close)
@@ -407,6 +428,11 @@
             // Ensure we're above ground (safety check)
             if (this.yPos >= this.groundYPos) {
                 // Already on ground, switch to running
+                console.log('[RESPAWN_FALLING] Dino already on ground, switching to RUNNING', {
+                    xPos: this.xPos,
+                    yPos: this.yPos,
+                    groundYPos: this.groundYPos
+                });
                 this.yPos = this.groundYPos;
                 this.respawnStartTime = 0;
                 this.respawnBlinkCount = 0;
@@ -426,17 +452,39 @@
             // Then apply gravity
             this.jumpVelocity += this.config.GRAVITY * framesElapsed;
             
+            // Log position every frame for debugging
+            console.log('[RESPAWN_FALLING] Position update', {
+                xPos: this.xPos,
+                yPos: this.yPos,
+                groundYPos: this.groundYPos,
+                jumpVelocity: this.jumpVelocity,
+                status: this.status
+            });
+            
             // Draw the dino while falling
             this.draw(this.currentAnimFrames[0], 0);
             
-            // Check if reached ground
-            if (this.yPos >= this.groundYPos) {
-                this.yPos = this.groundYPos;
-                // Switch to running state - respawning property is synced by state machine
-                this.respawnStartTime = 0;
-                this.respawnBlinkCount = 0;
-                this.jumpVelocity = 0;
-                this.update(0, Trex.status.RUNNING);
+            // Update state machine with new position - it will handle automatic transitions
+            if (this.stateMachine) {
+                var wasFalling = this.stateMachine.isState(DinoState.RESPAWNING_FALLING);
+                var transitioned = this.stateMachine.updatePosition(deltaTime);
+                // If state machine transitioned from RESPAWNING_FALLING to RUNNING, do cleanup
+                if (wasFalling && transitioned && this.stateMachine.isState(DinoState.RUNNING)) {
+                    // Reset respawn animation state (state machine entry handler already set position)
+                    this.respawnStartTime = 0;
+                    this.respawnBlinkCount = 0;
+                    this.jumpVelocity = 0;
+                }
+            } else {
+                // Fallback for legacy code without state machine
+                // Check if reached ground
+                if (this.yPos >= this.groundYPos) {
+                    this.yPos = this.groundYPos;
+                    this.respawnStartTime = 0;
+                    this.respawnBlinkCount = 0;
+                    this.jumpVelocity = 0;
+                    this.update(0, Trex.status.RUNNING);
+                }
             }
         },
 
@@ -512,10 +560,25 @@
                 this.endJump();
             }
 
-            // Back down at ground level. Jump completed.
-            if (this.yPos > this.groundYPos) {
-                this.reset();
-                this.jumpCount++;
+            // Update state machine with new position - it will handle automatic transitions
+            var wasJumping = this.stateMachine && this.stateMachine.isState(DinoState.JUMPING);
+            if (this.stateMachine) {
+                var transitioned = this.stateMachine.updatePosition(deltaTime);
+                // If state machine transitioned from JUMPING to RUNNING, do cleanup
+                if (wasJumping && transitioned && this.stateMachine.isState(DinoState.RUNNING)) {
+                    // Reset jump-related properties (state machine entry handler already set position)
+                    this.jumpVelocity = 0;
+                    this.midair = false;
+                    this.speedDrop = false;
+                    this.jumpCount++;
+                }
+            } else {
+                // Fallback for legacy code without state machine
+                // Back down at ground level. Jump completed.
+                if (this.yPos > this.groundYPos) {
+                    this.reset();
+                    this.jumpCount++;
+                }
             }
 
             this.update(deltaTime);

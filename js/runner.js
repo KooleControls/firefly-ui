@@ -1148,29 +1148,111 @@
                 });
             }
 
+            // Debounce: prevent processing the same button press multiple times in quick succession
+            var timeStampFn = (typeof getTimeStamp !== 'undefined') ? getTimeStamp : 
+                             (window.getTimeStamp ? window.getTimeStamp : Date.now);
+            var currentTime = timeStampFn();
+            var lastButtonTime = dino.lastButtonTime || 0;
+            var buttonDebounceTime = 100; // 100ms debounce to prevent duplicate processing
+            
+            if (currentTime - lastButtonTime < buttonDebounceTime) {
+                console.log('[BUTTON_PRESS] Ignoring duplicate button press (debounced)', {
+                    mac: mac,
+                    timeSinceLastPress: currentTime - lastButtonTime,
+                    timestamp: new Date().toISOString()
+                });
+                return; // Ignore duplicate button press
+            }
+            dino.lastButtonTime = currentTime;
+
+            // Get current state BEFORE any transitions to prevent double-processing
+            var currentState = dino && dino.stateMachine ? dino.stateMachine.getState() : null;
+            console.log('[BUTTON_PRESS] Current state at start of handler:', currentState, {
+                mac: mac,
+                xPos: dino ? dino.xPos : 'N/A',
+                yPos: dino ? dino.yPos : 'N/A',
+                groundYPos: dino ? dino.groundYPos : 'N/A',
+                timestamp: new Date().toISOString()
+            });
+
             // If dino is crashed, transition to RESPAWNING_BLINKING on button press
-            // Use state machine to check crashed state
-            if (dino && dino.stateMachine && dino.stateMachine.isCrashed()) {
+            // Use state machine to check crashed state - check BEFORE transitioning
+            // Only allow respawn if at least 2 seconds have passed since crash
+            if (dino && dino.stateMachine && currentState === DinoState.CRASHED) {
+                // Check if 2 seconds have passed since crash
+                var timeStampFn = (typeof getTimeStamp !== 'undefined') ? getTimeStamp : 
+                                 (window.getTimeStamp ? window.getTimeStamp : Date.now);
+                var currentTime = timeStampFn();
+                var timeSinceCrash = currentTime - (dino.crashTime || 0);
+                var minCrashDuration = 2000; // 2 seconds in milliseconds
+                
+                if (dino.crashTime === 0) {
+                    // Crash time not set, allow respawn (backward compatibility)
+                    console.warn('[BUTTON_PRESS] Crash time not set, allowing respawn anyway');
+                } else if (timeSinceCrash < minCrashDuration) {
+                    // Not enough time has passed since crash
+                    var remainingTime = minCrashDuration - timeSinceCrash;
+                    console.log('[BUTTON_PRESS] Button press during CRASHED state - but only ' + Math.round(timeSinceCrash) + 'ms have passed. Need ' + minCrashDuration + 'ms. Waiting ' + Math.round(remainingTime) + 'ms more.', {
+                        mac: mac,
+                        status: dino.status,
+                        stateMachineState: currentState,
+                        timeSinceCrash: timeSinceCrash,
+                        crashTime: dino.crashTime,
+                        currentTime: currentTime,
+                        timestamp: new Date().toISOString()
+                    });
+                    Logger.info('BUTTON_PRESS', 'Button press while crashed - but not enough time has passed', {
+                        mac: mac,
+                        status: dino.status,
+                        stateMachineState: currentState,
+                        timeSinceCrash: timeSinceCrash,
+                        minCrashDuration: minCrashDuration
+                    });
+                    return; // Don't allow respawn yet
+                }
+                
+                console.log('[BUTTON_PRESS] Button press received during CRASHED state - transitioning to RESPAWNING_BLINKING', {
+                    mac: mac,
+                    status: dino.status,
+                    stateMachineState: currentState,
+                    timeSinceCrash: timeSinceCrash,
+                    xPos: dino.xPos,
+                    yPos: dino.yPos,
+                    groundYPos: dino.groundYPos,
+                    timestamp: new Date().toISOString()
+                });
                 Logger.info('BUTTON_PRESS', 'Button press while crashed - transitioning to RESPAWNING_BLINKING', {
                     mac: mac,
                     status: dino.status,
-                    stateMachineState: dino.stateMachine.getState()
+                    stateMachineState: currentState,
+                    timeSinceCrash: timeSinceCrash
                 });
                 dino.update(0, Trex.status.RESPAWNING_BLINKING);
+                // Reset crash time when respawning starts
+                dino.crashTime = 0;
                 if (this.soundFx && this.soundFx.BUTTON_PRESS) {
                     this.playSound(this.soundFx.BUTTON_PRESS);
                 }
-                return; // Don't process as jump
+                return; // Don't process as jump - IMPORTANT: return immediately to prevent checking RESPAWNING_BLINKING below
             }
 
             // If dino is blinking (waiting for fall), transition to falling state
-            // Use state machine to check state
-            if (dino && dino.stateMachine && dino.stateMachine.isState(DinoState.RESPAWNING_BLINKING)) {
+            // Use state machine to check state - check BEFORE transitioning
+            if (dino && dino.stateMachine && currentState === DinoState.RESPAWNING_BLINKING) {
+                console.log('[BUTTON_PRESS] Button press received during RESPAWNING_BLINKING state - transitioning to RESPAWNING_FALLING', {
+                    mac: mac,
+                    status: dino.status,
+                    stateMachineState: currentState,
+                    xPos: dino.xPos,
+                    yPos: dino.yPos,
+                    groundYPos: dino.groundYPos,
+                    timestamp: new Date().toISOString()
+                });
                 Logger.info('BUTTON_PRESS', 'Button press during respawn blinking - transitioning to falling', {
                     mac: mac,
                     respawning: dino.respawning,
                     status: dino.status,
-                    stateMachineState: dino.stateMachine.getState()
+                    stateMachineState: currentState
                 });
                 dino.update(0, Trex.status.RESPAWNING_FALLING);
                 if (this.soundFx && this.soundFx.BUTTON_PRESS) {
@@ -1714,11 +1796,12 @@
             // Transition to CRASHED state - state machine will sync crashed property
             dino.update(100, Trex.status.CRASHED);
             
-            // Reset counter and respawn after a delay
-            var self = this;
-            setTimeout(function() {
-                self.respawnDino(dino);
-            }, 2000); // 2 second delay before respawn
+            // Record crash time - use getTimeStamp if available, otherwise Date.now()
+            var timeStampFn = (typeof getTimeStamp !== 'undefined') ? getTimeStamp : 
+                             (window.getTimeStamp ? window.getTimeStamp : Date.now);
+            dino.crashTime = timeStampFn();
+            
+            // No automatic respawn - user must press button to respawn (after 2 seconds)
         },
 
         /**

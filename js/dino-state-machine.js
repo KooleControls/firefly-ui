@@ -40,12 +40,17 @@
         this.previousState = null;
         this.stateHistory = [];
         this.listeners = {};
+        this.entryHandlers = {}; // State entry handlers
+        this.exitHandlers = {}; // State exit handlers
         this.maxHistorySize = 10;
         
         // Game mode specific flags
         this.crashed = false; // Individual crash state (important for competitive mode)
         this.respawning = false;
         this.canRespawn = this.gameMode === GameMode.COMPETITIVE; // Only competitive mode allows respawn
+        
+        // Initialize default entry handlers
+        this.initDefaultEntryHandlers();
         
         Logger.info('DINO_STATE_MACHINE', 'Constructor called', {
             gameMode: this.gameMode,
@@ -205,6 +210,9 @@
                 // Sync dino status to ensure consistency
                 this.syncDinoStatusFromState(normalizedState);
 
+                // Call entry handler for self-transition (useful for re-initialization)
+                this.callEntryHandler(normalizedState, oldState, data);
+
                 Logger.debug('DINO_STATE_MACHINE', 'Self-transition complete. Current state: ' + this.currentState);
                 return true;
             }
@@ -255,11 +263,17 @@
                 this.stateHistory.shift();
             }
 
+            // Call exit handler for old state
+            this.callExitHandler(oldState, normalizedState, data);
+
             // Notify listeners
             this.notifyListeners(oldState, normalizedState, data);
 
             // Sync the dino's legacy status from state machine (source of truth)
             this.syncDinoStatusFromState(normalizedState);
+
+            // Call entry handler for new state
+            this.callEntryHandler(normalizedState, oldState, data);
 
             Logger.debug('DINO_STATE_MACHINE', 'Transition complete. Current state: ' + this.currentState);
             return true;
@@ -532,6 +546,442 @@
          */
         getHistory: function() {
             return this.stateHistory.slice();
+        },
+
+        /**
+         * Check if dino is grounded (yPos >= groundYPos)
+         * @return {boolean}
+         */
+        isGrounded: function() {
+            if (!this.dino || this.dino.groundYPos === undefined || this.dino.yPos === undefined) {
+                Logger.warn('DINO_STATE_MACHINE', 'isGrounded() called but dino position not available');
+                return false;
+            }
+            return this.dino.yPos >= this.dino.groundYPos;
+        },
+
+        /**
+         * Check if dino is airborne (yPos < groundYPos)
+         * @return {boolean}
+         */
+        isAirborne: function() {
+            if (!this.dino || this.dino.groundYPos === undefined || this.dino.yPos === undefined) {
+                Logger.warn('DINO_STATE_MACHINE', 'isAirborne() called but dino position not available');
+                return false;
+            }
+            return this.dino.yPos < this.dino.groundYPos;
+        },
+
+        /**
+         * Get position state as a string
+         * @return {string} 'grounded', 'airborne', or 'floating' (for respawning above ground)
+         */
+        getPositionState: function() {
+            if (!this.dino || this.dino.groundYPos === undefined || this.dino.yPos === undefined) {
+                return 'unknown';
+            }
+            if (this.dino.yPos > this.dino.groundYPos) {
+                return 'below_ground'; // Below ground (shouldn't happen normally)
+            } else if (this.dino.yPos === this.dino.groundYPos) {
+                return 'grounded';
+            } else if (this.isState(DinoState.RESPAWNING_BLINKING) || this.isState(DinoState.RESPAWNING_FALLING)) {
+                return 'floating'; // Floating above ground during respawn
+            } else {
+                return 'airborne'; // In the air (jumping)
+            }
+        },
+
+        /**
+         * Get distance from ground (positive = above ground, negative = below ground)
+         * @return {number}
+         */
+        getDistanceFromGround: function() {
+            if (!this.dino || this.dino.groundYPos === undefined || this.dino.yPos === undefined) {
+                return 0;
+            }
+            return this.dino.groundYPos - this.dino.yPos;
+        },
+
+        /**
+         * Initialize default entry handlers for position initialization
+         */
+        initDefaultEntryHandlers: function() {
+            var self = this;
+            
+            // RESPAWNING_BLINKING: Position dino above ground
+            this.entryHandlers[DinoState.RESPAWNING_BLINKING] = function(newState, oldState, data) {
+                if (!self.dino) return;
+                var floatHeight = 50; // Pixels above ground
+                self.dino.yPos = self.dino.groundYPos - floatHeight;
+                self.dino.jumpVelocity = 0; // Keep it floating
+                self.dino.respawnStartTime = 0; // Will be set in updateRespawnAnimation
+                self.dino.respawnBlinkCount = 0;
+                self.dino.respawnFallTriggered = false;
+                Logger.debug('DINO_STATE_MACHINE', 'RESPAWNING_BLINKING entry: Positioned dino above ground', {
+                    yPos: self.dino.yPos,
+                    groundYPos: self.dino.groundYPos,
+                    floatHeight: floatHeight
+                });
+            };
+
+            // RESPAWNING_FALLING: Ensure dino is above ground before falling
+            this.entryHandlers[DinoState.RESPAWNING_FALLING] = function(newState, oldState, data) {
+                if (!self.dino) return;
+                // If already on ground, transition directly to RUNNING
+                if (self.dino.yPos >= self.dino.groundYPos) {
+                    self.dino.yPos = self.dino.groundYPos;
+                    self.dino.jumpVelocity = 0;
+                    Logger.debug('DINO_STATE_MACHINE', 'RESPAWNING_FALLING entry: Already on ground, transitioning to RUNNING');
+                    self.transition(DinoState.RUNNING);
+                    return;
+                }
+                // Otherwise, start falling (jumpVelocity will be updated by physics)
+                Logger.debug('DINO_STATE_MACHINE', 'RESPAWNING_FALLING entry: Starting fall', {
+                    yPos: self.dino.yPos,
+                    groundYPos: self.dino.groundYPos
+                });
+            };
+
+            // RUNNING: Ensure dino is on ground
+            this.entryHandlers[DinoState.RUNNING] = function(newState, oldState, data) {
+                if (!self.dino) return;
+                self.dino.yPos = self.dino.groundYPos;
+                self.dino.jumpVelocity = 0;
+                Logger.debug('DINO_STATE_MACHINE', 'RUNNING entry: Positioned dino on ground', {
+                    yPos: self.dino.yPos,
+                    groundYPos: self.dino.groundYPos
+                });
+            };
+
+            // JUMPING: Validate position (can start from ground)
+            this.entryHandlers[DinoState.JUMPING] = function(newState, oldState, data) {
+                if (!self.dino) return;
+                // JUMPING can start from ground, so we don't force position
+                // But we ensure jumpVelocity is set (should be set by startJump)
+                Logger.debug('DINO_STATE_MACHINE', 'JUMPING entry: Validated jump start', {
+                    yPos: self.dino.yPos,
+                    groundYPos: self.dino.groundYPos,
+                    jumpVelocity: self.dino.jumpVelocity
+                });
+            };
+
+            // DUCKING: Ensure dino is on ground
+            this.entryHandlers[DinoState.DUCKING] = function(newState, oldState, data) {
+                if (!self.dino) return;
+                self.dino.yPos = self.dino.groundYPos;
+                Logger.debug('DINO_STATE_MACHINE', 'DUCKING entry: Positioned dino on ground');
+            };
+
+            // WAITING: Ensure dino is on ground
+            this.entryHandlers[DinoState.WAITING] = function(newState, oldState, data) {
+                if (!self.dino) return;
+                self.dino.yPos = self.dino.groundYPos;
+                self.dino.jumpVelocity = 0;
+                Logger.debug('DINO_STATE_MACHINE', 'WAITING entry: Positioned dino on ground');
+            };
+
+            // CRASHED: No position requirement, but log for debugging
+            this.entryHandlers[DinoState.CRASHED] = function(newState, oldState, data) {
+                if (!self.dino) return;
+                Logger.debug('DINO_STATE_MACHINE', 'CRASHED entry: State changed to crashed', {
+                    yPos: self.dino.yPos,
+                    groundYPos: self.dino.groundYPos
+                });
+            };
+        },
+
+        /**
+         * Register a state entry handler
+         * @param {string} state State to register handler for
+         * @param {Function} callback Function(newState, oldState, data)
+         */
+        registerStateEntryHandler: function(state, callback) {
+            if (!this.entryHandlers[state]) {
+                this.entryHandlers[state] = callback;
+            } else {
+                // Chain with existing handler
+                var existing = this.entryHandlers[state];
+                this.entryHandlers[state] = function(newState, oldState, data) {
+                    existing.call(this, newState, oldState, data);
+                    callback.call(this, newState, oldState, data);
+                };
+            }
+            Logger.debug('DINO_STATE_MACHINE', 'Registered entry handler for state: ' + state);
+        },
+
+        /**
+         * Register a state exit handler
+         * @param {string} state State to register handler for
+         * @param {Function} callback Function(oldState, newState, data)
+         */
+        registerStateExitHandler: function(state, callback) {
+            if (!this.exitHandlers[state]) {
+                this.exitHandlers[state] = callback;
+            } else {
+                // Chain with existing handler
+                var existing = this.exitHandlers[state];
+                this.exitHandlers[state] = function(oldState, newState, data) {
+                    existing.call(this, oldState, newState, data);
+                    callback.call(this, oldState, newState, data);
+                };
+            }
+            Logger.debug('DINO_STATE_MACHINE', 'Registered exit handler for state: ' + state);
+        },
+
+        /**
+         * Call entry handler for a state
+         * @param {string} state
+         * @param {string} oldState
+         * @param {Object} data
+         */
+        callEntryHandler: function(state, oldState, data) {
+            if (this.entryHandlers[state]) {
+                try {
+                    this.entryHandlers[state].call(this, state, oldState, data);
+                } catch (e) {
+                    Logger.error('DINO_STATE_MACHINE', 'Error in entry handler for ' + state, { error: e });
+                }
+            }
+        },
+
+        /**
+         * Call exit handler for a state
+         * @param {string} state
+         * @param {string} newState
+         * @param {Object} data
+         */
+        callExitHandler: function(state, newState, data) {
+            if (this.exitHandlers[state]) {
+                try {
+                    this.exitHandlers[state].call(this, state, newState, data);
+                } catch (e) {
+                    Logger.error('DINO_STATE_MACHINE', 'Error in exit handler for ' + state, { error: e });
+                }
+            }
+        },
+
+        /**
+         * Validate that position matches the current state
+         * @return {boolean} True if position is valid for current state
+         */
+        validatePositionState: function() {
+            if (!this.dino || this.dino.groundYPos === undefined || this.dino.yPos === undefined) {
+                Logger.warn('DINO_STATE_MACHINE', 'validatePositionState() called but dino position not available');
+                return false;
+            }
+
+            var state = this.currentState;
+            var yPos = this.dino.yPos;
+            var groundYPos = this.dino.groundYPos;
+            var isValid = true;
+            var reason = '';
+
+            switch(state) {
+                case DinoState.JUMPING:
+                    // JUMPING: Should be airborne (yPos < groundYPos) or just starting from ground
+                    // Allow small tolerance for floating point errors
+                    if (yPos > groundYPos + 1) {
+                        isValid = false;
+                        reason = 'JUMPING state but yPos > groundYPos (below ground)';
+                    }
+                    break;
+                case DinoState.RUNNING:
+                case DinoState.DUCKING:
+                case DinoState.WAITING:
+                    // These states require being on ground
+                    if (Math.abs(yPos - groundYPos) > 1) {
+                        isValid = false;
+                        reason = state + ' state but yPos != groundYPos (not on ground)';
+                    }
+                    break;
+                case DinoState.RESPAWNING_BLINKING:
+                case DinoState.RESPAWNING_FALLING:
+                    // RESPAWNING: Can be above ground (floating) or at ground (falling)
+                    if (yPos > groundYPos + 1) {
+                        isValid = false;
+                        reason = state + ' state but yPos > groundYPos (below ground)';
+                    }
+                    break;
+                case DinoState.CRASHED:
+                    // CRASHED: No position requirement
+                    isValid = true;
+                    break;
+                default:
+                    // Unknown state, allow any position
+                    isValid = true;
+                    break;
+            }
+
+            if (!isValid) {
+                Logger.warn('DINO_STATE_MACHINE', 'Position validation failed', {
+                    state: state,
+                    yPos: yPos,
+                    groundYPos: groundYPos,
+                    reason: reason
+                });
+            }
+
+            return isValid;
+        },
+
+        /**
+         * Auto-correct position to match current state
+         * @return {boolean} True if correction was made
+         */
+        autoCorrectPosition: function() {
+            if (!this.dino || this.dino.groundYPos === undefined || this.dino.yPos === undefined) {
+                return false;
+            }
+
+            var state = this.currentState;
+            var yPos = this.dino.yPos;
+            var groundYPos = this.dino.groundYPos;
+            var corrected = false;
+            var oldYPos = yPos;
+
+            switch(state) {
+                case DinoState.RUNNING:
+                case DinoState.DUCKING:
+                case DinoState.WAITING:
+                    // These states require being on ground
+                    if (Math.abs(yPos - groundYPos) > 1) {
+                        this.dino.yPos = groundYPos;
+                        this.dino.jumpVelocity = 0;
+                        corrected = true;
+                        Logger.info('DINO_STATE_MACHINE', 'Auto-corrected position for ' + state, {
+                            oldYPos: oldYPos,
+                            newYPos: groundYPos,
+                            groundYPos: groundYPos
+                        });
+                    }
+                    break;
+                case DinoState.JUMPING:
+                    // If below ground, move to ground (shouldn't happen, but fix it)
+                    if (yPos > groundYPos + 1) {
+                        this.dino.yPos = groundYPos;
+                        this.dino.jumpVelocity = 0;
+                        corrected = true;
+                        Logger.info('DINO_STATE_MACHINE', 'Auto-corrected JUMPING position (was below ground)', {
+                            oldYPos: oldYPos,
+                            newYPos: groundYPos
+                        });
+                        // Transition to RUNNING since we're on ground
+                        this.transition(DinoState.RUNNING);
+                    }
+                    break;
+                case DinoState.RESPAWNING_BLINKING:
+                case DinoState.RESPAWNING_FALLING:
+                    // If below ground, move to ground
+                    if (yPos > groundYPos + 1) {
+                        this.dino.yPos = groundYPos;
+                        this.dino.jumpVelocity = 0;
+                        corrected = true;
+                        Logger.info('DINO_STATE_MACHINE', 'Auto-corrected ' + state + ' position (was below ground)', {
+                            oldYPos: oldYPos,
+                            newYPos: groundYPos
+                        });
+                        // If falling and on ground, transition to RUNNING
+                        if (state === DinoState.RESPAWNING_FALLING) {
+                            this.transition(DinoState.RUNNING);
+                        }
+                    }
+                    break;
+                case DinoState.CRASHED:
+                    // No position correction for crashed state
+                    break;
+            }
+
+            return corrected;
+        },
+
+        /**
+         * Check position and automatically transition states if conditions are met
+         * @return {boolean} True if a transition occurred
+         */
+        checkPositionBasedTransitions: function() {
+            if (!this.dino || this.dino.groundYPos === undefined || this.dino.yPos === undefined) {
+                return false;
+            }
+
+            var state = this.currentState;
+            var yPos = this.dino.yPos;
+            var groundYPos = this.dino.groundYPos;
+            var transitioned = false;
+
+            // JUMPING -> RUNNING: When dino lands (yPos >= groundYPos)
+            if (state === DinoState.JUMPING && this.isGrounded()) {
+                Logger.info('DINO_STATE_MACHINE', 'Automatic transition: JUMPING -> RUNNING (landed)', {
+                    yPos: yPos,
+                    groundYPos: groundYPos
+                });
+                this.transition(DinoState.RUNNING);
+                transitioned = true;
+            }
+
+            // RESPAWNING_FALLING -> RUNNING: When falling dino reaches ground
+            if (state === DinoState.RESPAWNING_FALLING && this.isGrounded()) {
+                Logger.info('DINO_STATE_MACHINE', 'Automatic transition: RESPAWNING_FALLING -> RUNNING (landed)', {
+                    yPos: yPos,
+                    groundYPos: groundYPos
+                });
+                // Reset respawn animation state
+                if (this.dino.respawnStartTime !== undefined) {
+                    this.dino.respawnStartTime = 0;
+                }
+                if (this.dino.respawnBlinkCount !== undefined) {
+                    this.dino.respawnBlinkCount = 0;
+                }
+                if (this.dino.respawnFallTriggered !== undefined) {
+                    this.dino.respawnFallTriggered = false;
+                }
+                this.transition(DinoState.RUNNING);
+                transitioned = true;
+            }
+
+            return transitioned;
+        },
+
+        /**
+         * Update position and handle automatic state transitions
+         * This method should be called after physics updates position
+         * @param {number} deltaTime Time elapsed since last update
+         * @param {number} opt_newYPos Optional new Y position (if not provided, uses dino.yPos)
+         * @return {boolean} True if a state transition occurred
+         */
+        updatePosition: function(deltaTime, opt_newYPos) {
+            if (!this.dino || this.dino.groundYPos === undefined) {
+                return false;
+            }
+
+            // Use provided position or current dino position
+            var newYPos = opt_newYPos !== undefined ? opt_newYPos : this.dino.yPos;
+            
+            // Update dino position if provided
+            if (opt_newYPos !== undefined) {
+                this.dino.yPos = newYPos;
+            }
+
+            // Validate position matches state
+            var isValid = this.validatePositionState();
+            
+            // Auto-correct if invalid (but don't override physics updates)
+            if (!isValid) {
+                Logger.debug('DINO_STATE_MACHINE', 'Position validation failed, attempting auto-correction');
+                this.autoCorrectPosition();
+            }
+
+            // Check for automatic position-based transitions
+            var transitioned = this.checkPositionBasedTransitions();
+
+            Logger.debug('DINO_STATE_MACHINE', 'updatePosition() completed', {
+                yPos: this.dino.yPos,
+                groundYPos: this.dino.groundYPos,
+                state: this.currentState,
+                isValid: isValid,
+                transitioned: transitioned
+            });
+
+            return transitioned;
         }
     };
 
