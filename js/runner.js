@@ -39,7 +39,10 @@
         this.tRexes = []; // Array of dinos for multiplayer
         this.playerMap = {}; // Map MAC addresses to dino instances
         this.lastButtonPresses = {}; // Track last button press count per player
-        this.apiUrl = 'http://192.168.50.27/api/guests/events';
+        this.apiBaseUrl = 'http://192.168.50.27';
+        this.eventsEndpoint = '/api/guests/events';
+        this.scorePostEndpoint = '/api/score';
+        this.apiUrl = this.apiBaseUrl + this.eventsEndpoint;
         this.eventSource = null; // For streaming connection (EventSource)
         this.fetchStreamReader = null; // For fetch-based streaming fallback
 
@@ -746,6 +749,35 @@
                 document.removeEventListener(RunnerGlobal.events.MOUSEUP, this);
             }
         },
+
+        /**
+         * Periodically push each player's score to the API.
+         */
+        startScorePushLoop: function () {
+            var self = this;
+
+            if (this.scorePushInterval) {
+                clearInterval(this.scorePushInterval);
+            }
+
+            this.scorePushInterval = setInterval(function () {
+                for (var mac in self.playerMap) {
+                    var dino = self.playerMap[mac];
+                    if (!dino || dino.crashed) continue;
+
+                    var score = Math.ceil(self.distanceMeter.getActualDistance(dino.distanceRan));
+
+                    fetch(self.apiBaseUrl + self.scorePostEndpoint, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ score: score, mac: mac })
+                    }).catch((err) => {
+                        console.warn("Score push failed for", mac, err);
+                    });
+                }
+            }, 1000); // every 1 second
+        },
+
 
         /**
          * Start streaming connection to the API for player data.
@@ -1665,6 +1697,7 @@
             // Start the game
             this.activated = true;
             this.startApiPolling();
+            this.startScorePushLoop();
         },
 
         /**
