@@ -118,7 +118,10 @@
             RESTART: { x: 2, y: 2 },
             TEXT_SPRITE: { x: 655, y: 2 },
             TREX: { x: 848, y: 2 },
-            STAR: { x: 645, y: 2 }
+            STAR: { x: 645, y: 2 },
+            KCSIGN: { x: 1235, y: 2 },
+            KCBAR: { x: 1278, y: 13 },
+            KCLOCK: { x: 1330, y: 2 }
         },
         HDPI: {
             CACTUS_LARGE: { x: 652, y: 2 },
@@ -130,7 +133,10 @@
             RESTART: { x: 2, y: 2 },
             TEXT_SPRITE: { x: 1294, y: 2 },
             TREX: { x: 1678, y: 2 },
-            STAR: { x: 1276, y: 2 }
+            STAR: { x: 1276, y: 2 },
+            KCSIGN: { x: 1235, y: 2 },
+            KCBAR: { x: 1278, y: 13 },
+            KCLOCK: { x: 1330, y: 2 }
         }
     };
 

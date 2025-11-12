@@ -107,7 +107,52 @@
             numFrames: 2,
             frameRate: 1000 / 6,
             speedOffset: .8
+        },
+        {
+            type: 'KCSIGN',
+            width: 36,
+            height: 60,
+            yPos: 90,
+            multipleSpeed: 7,
+            minGap: 120,
+            minSpeed: 0,
+            collisionBoxes: [
+                new CollisionBox(0, 12, 7, 38),
+                new CollisionBox(8, 0, 7, 49),
+                new CollisionBox(13, 10, 10, 38)
+            ]
+        },
+        {
+            type: 'KCBAR',
+            width: 47,
+            height: 42,
+            yPos: 100,
+            multipleSpeed: 7,
+            minGap: 120,
+            minSpeed: 0,
+            collisionBoxes: [
+                new CollisionBox(0, 12, 7, 38),
+                new CollisionBox(8, 0, 7, 49),
+                new CollisionBox(13, 10, 10, 38)
+            ]
+        },
+        {
+            type: 'KCLOCK',
+            width: 39,
+            height: 57,
+            yPos: 90,
+            multipleSpeed: 7,
+            minGap: 120,
+            minSpeed: 0,
+            collisionBoxes: [
+                new CollisionBox(0, 12, 7, 38),
+                new CollisionBox(8, 0, 7, 49),
+                new CollisionBox(13, 10, 10, 38)
+            ]
         }
+
+
+        
     ];
 
     Obstacle.prototype = {
