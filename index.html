@@ -7,14 +7,20 @@
     <title >chrome easter egg: t-rex runner</title>
     <link rel="stylesheet" href="index.css">
     <link href="https://fonts.googleapis.com/css?family=Open+Sans" rel="stylesheet"> 
-    <script src="index.js"></script>
+    <!-- Load game modules in dependency order -->
+    <script src="js/config.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/collision.js"></script>
+    <script src="js/game-over-panel.js"></script>
+    <script src="js/trex.js"></script>
+    <script src="js/obstacle.js"></script>
+    <script src="js/distance-meter.js"></script>
+    <script src="js/horizon.js"></script>
+    <script src="js/runner.js"></script>
+    <script src="js/main.js"></script>
 </head>
 
 <body id="t" class="offline">
-    <div id="messageBox" class="sendmessage">
-         <h1 style="text-align: center;font-family: 'Open Sans', sans-serif;">Press Space to start</h1>
-         <div class="niokbutton" onclick="okbuttonsend()"></div>
-    </div>
     <div id="main-frame-error" class="interstitial-wrapper">
         <div id="main-content">
             <div class="icon icon-offline" alt=""></div>
@@ -30,15 +36,5 @@
         </div>
     </div>
 </body>
-
-<script>
-    document.onkeydown = function(evt) {
-    evt = evt || window.event;
-    if (evt.keyCode == 32) {
-        var box = document.getElementById("messageBox");
-        box.style.visibility="hidden";
-    }
-};
-</script>
     
 </html>
