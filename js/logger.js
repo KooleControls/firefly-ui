@@ -29,10 +29,10 @@
      * Modify these values to control what gets logged
      */
     var LoggerConfig = {
-        API: true,              // API events and button presses
+        API: false,              // API events and button presses
         RUNNER: false,           // Runner/game controller events
         TREX: false,             // Trex/dino events
-        DINO_STATE_MACHINE: false, // Dino state machine transitions
+        DINO_STATE_MACHINE: true, // Dino state machine transitions (disabled by default)
         GAME_STATE_MACHINE: false, // Game state machine transitions
         BUTTON_PRESS: false,     // Button press events (keyboard and API)
         ALL: true               // Master switch - if false, disables all logging

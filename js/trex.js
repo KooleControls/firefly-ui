@@ -106,7 +106,8 @@
         JUMPING: 'JUMPING',
         RUNNING: 'RUNNING',
         WAITING: 'WAITING',
-        RESPAWNING: 'RESPAWNING'
+        RESPAWNING_BLINKING: 'RESPAWNING_BLINKING',
+        RESPAWNING_FALLING: 'RESPAWNING_FALLING'
     };
 
     /**
@@ -140,9 +141,13 @@
             frames: [264, 323],
             msPerFrame: 1000 / 8
         },
-        RESPAWNING: {
+        RESPAWNING_BLINKING: {
             frames: [44, 0], // Same as WAITING for blinking effect
             msPerFrame: 1000 / 3
+        },
+        RESPAWNING_FALLING: {
+            frames: [0], // Single frame while falling
+            msPerFrame: 1000 / 60
         }
     };
 
@@ -216,31 +221,38 @@
         update: function (deltaTime, opt_status) {
             this.timer += deltaTime;
 
-            // Update the status using state machine if available
+            // If state machine exists, it is the source of truth
+            // Only update status if state machine doesn't exist (backward compatibility)
             if (opt_status && this.stateMachine) {
                 Logger.debug('TREX', 'update() called with status: ' + opt_status);
-                // Convert Trex.status to DinoState and transition
+                // Convert Trex.status to DinoState and transition through state machine
                 var dinoState = this.getDinoStateFromTrexStatus(opt_status);
                 Logger.debug('TREX', 'Converted Trex.status to DinoState', {
                     trexStatus: opt_status,
                     dinoState: dinoState,
-                    hasStateMachine: !!this.stateMachine
+                    hasStateMachine: !!this.stateMachine,
+                    currentState: this.stateMachine.getState()
                 });
                 if (dinoState) {
                     Logger.debug('TREX', 'Transitioning state machine to: ' + dinoState);
-                    this.stateMachine.transition(dinoState);
+                    // State machine will sync the status property via syncDinoStatusFromState()
+                    var transitionSuccess = this.stateMachine.transition(dinoState);
+                    if (!transitionSuccess) {
+                        Logger.warn('TREX', 'State transition failed, status may be out of sync', {
+                            requestedState: dinoState,
+                            currentState: this.stateMachine.getState(),
+                            requestedStatus: opt_status,
+                            currentStatus: this.status
+                        });
+                    }
                 } else {
                     Logger.warn('TREX', 'Could not convert Trex.status to DinoState: ' + opt_status);
                 }
+                // Don't update status directly - state machine is source of truth
+                // Status will be synced by state machine after successful transition
             } else if (opt_status) {
-                Logger.warn('TREX', 'update() called with status but no state machine', {
-                    status: opt_status,
-                    hasStateMachine: !!this.stateMachine
-                });
-            }
-
-            // Update the status (legacy support)
-            if (opt_status) {
+                // Legacy support: update status directly if no state machine
+                Logger.debug('TREX', 'update() called with status but no state machine - using legacy mode');
                 this.status = opt_status;
                 this.currentFrame = 0;
                 this.msPerFrame = Trex.animFrames[opt_status].msPerFrame;
@@ -258,17 +270,21 @@
                     this.config.INTRO_DURATION) * deltaTime);
             }
 
-            // Handle respawn animation
-            if (this.status == Trex.status.RESPAWNING) {
-                this.updateRespawnAnimation(deltaTime);
+            // Handle respawn animations
+            if (this.status == Trex.status.RESPAWNING_BLINKING) {
+                this.updateRespawnBlinking(deltaTime);
+            } else if (this.status == Trex.status.RESPAWNING_FALLING) {
+                this.updateRespawnFalling(deltaTime);
             } else if (this.status == Trex.status.WAITING) {
                 this.blink(getTimeStamp());
             } else {
                 this.draw(this.currentAnimFrames[this.currentFrame], 0);
             }
 
-            // Update the frame position (skip for respawning - handled in updateRespawnAnimation)
-            if (this.status != Trex.status.RESPAWNING && this.timer >= this.msPerFrame) {
+            // Update the frame position (skip for respawning states - handled in their update functions)
+            if (this.status != Trex.status.RESPAWNING_BLINKING && 
+                this.status != Trex.status.RESPAWNING_FALLING && 
+                this.timer >= this.msPerFrame) {
                 this.currentFrame = this.currentFrame ==
                     this.currentAnimFrames.length - 1 ? 0 : this.currentFrame + 1;
                 this.timer = 0;
@@ -350,18 +366,16 @@
         },
 
         /**
-         * Update respawn animation: float above ground, blink 4 times, then fall.
+         * Update respawn blinking animation: float above ground and blink.
          * @param {number} deltaTime
          */
-        updateRespawnAnimation: function (deltaTime) {
+        updateRespawnBlinking: function (deltaTime) {
             var currentTime = getTimeStamp();
             
             // Initialize respawn start time if not set
             if (this.respawnStartTime === 0) {
                 this.respawnStartTime = currentTime;
                 this.respawnBlinkCount = 0;
-                this.lastBlinkFrame = 0; // Track last frame to detect blink completion
-                this.respawnFallTriggered = false; // Reset fall trigger
                 // Position dino above ground (float height)
                 var floatHeight = 50; // Pixels above ground
                 this.yPos = this.groundYPos - floatHeight;
@@ -371,59 +385,58 @@
             var elapsedTime = currentTime - this.respawnStartTime;
             var blinkInterval = this.respawnBlinkDelay * 2; // Time for one complete blink (open + close)
 
-            // Keep blinking until button is pressed to trigger fall
-            if (!this.respawnFallTriggered) {
-                // Calculate which frame of the blink we're on
-                var blinkCycle = Math.floor((elapsedTime % blinkInterval) / this.respawnBlinkDelay);
-                this.currentFrame = blinkCycle;
-                
-                // Update blink count based on elapsed time
-                var newBlinkCount = Math.floor(elapsedTime / blinkInterval);
-                if (newBlinkCount > this.respawnBlinkCount) {
-                    this.respawnBlinkCount = newBlinkCount;
-                }
-                
-                // Draw the blinking dino
-                this.draw(this.currentAnimFrames[this.currentFrame], 0);
-            } else {
-                // Button was pressed, start falling
-                // Ensure we're above ground (safety check)
-                if (this.yPos >= this.groundYPos) {
-                    // Already on ground, switch to running
-                    this.yPos = this.groundYPos;
-                    this.respawning = false;
-                    this.respawnStartTime = 0;
-                    this.respawnBlinkCount = 0;
-                    this.lastBlinkFrame = 0;
-                    this.jumpVelocity = 0;
-                    this.update(0, Trex.status.RUNNING);
-                } else {
-                    // Apply gravity to make it fall (use same approach as updateJump)
-                    // Use standard 60fps for physics calculations (not animation frame rate)
-                    var msPerFrame = 1000 / 60; // ~16.67ms per frame at 60fps
-                    var framesElapsed = deltaTime / msPerFrame;
-                    
-                    // Update position first (like updateJump does)
-                    this.yPos += Math.round(this.jumpVelocity * framesElapsed);
-                    
-                    // Then apply gravity
-                    this.jumpVelocity += this.config.GRAVITY * framesElapsed;
-                    
-                    // Draw the dino while falling
-                    this.draw(this.currentAnimFrames[0], 0);
-                    
-                    // Check if reached ground
-                    if (this.yPos >= this.groundYPos) {
-                        this.yPos = this.groundYPos;
-                        // Switch to running state
-                        this.respawning = false;
-                        this.respawnStartTime = 0;
-                        this.respawnBlinkCount = 0;
-                        this.lastBlinkFrame = 0;
-                        this.jumpVelocity = 0;
-                        this.update(0, Trex.status.RUNNING);
-                    }
-                }
+            // Calculate which frame of the blink we're on
+            var blinkCycle = Math.floor((elapsedTime % blinkInterval) / this.respawnBlinkDelay);
+            this.currentFrame = blinkCycle;
+            
+            // Update blink count based on elapsed time
+            var newBlinkCount = Math.floor(elapsedTime / blinkInterval);
+            if (newBlinkCount > this.respawnBlinkCount) {
+                this.respawnBlinkCount = newBlinkCount;
+            }
+            
+            // Draw the blinking dino
+            this.draw(this.currentAnimFrames[this.currentFrame], 0);
+        },
+
+        /**
+         * Update respawn falling animation: fall to ground.
+         * @param {number} deltaTime
+         */
+        updateRespawnFalling: function (deltaTime) {
+            // Ensure we're above ground (safety check)
+            if (this.yPos >= this.groundYPos) {
+                // Already on ground, switch to running
+                this.yPos = this.groundYPos;
+                this.respawnStartTime = 0;
+                this.respawnBlinkCount = 0;
+                this.jumpVelocity = 0;
+                this.update(0, Trex.status.RUNNING);
+                return;
+            }
+
+            // Apply gravity to make it fall (use same approach as updateJump)
+            // Use standard 60fps for physics calculations (not animation frame rate)
+            var msPerFrame = 1000 / 60; // ~16.67ms per frame at 60fps
+            var framesElapsed = deltaTime / msPerFrame;
+            
+            // Update position first (like updateJump does)
+            this.yPos += Math.round(this.jumpVelocity * framesElapsed);
+            
+            // Then apply gravity
+            this.jumpVelocity += this.config.GRAVITY * framesElapsed;
+            
+            // Draw the dino while falling
+            this.draw(this.currentAnimFrames[0], 0);
+            
+            // Check if reached ground
+            if (this.yPos >= this.groundYPos) {
+                this.yPos = this.groundYPos;
+                // Switch to running state - respawning property is synced by state machine
+                this.respawnStartTime = 0;
+                this.respawnBlinkCount = 0;
+                this.jumpVelocity = 0;
+                this.update(0, Trex.status.RUNNING);
             }
         },
 
@@ -446,7 +459,7 @@
                 this.update(0, Trex.status.JUMPING);
                 // Tweak the jump velocity based on the speed.
                 this.jumpVelocity = this.config.INIITAL_JUMP_VELOCITY - (speed / 10);
-                this.jumping = true;
+                // jumping property is synced by state machine - don't set directly
                 this.reachedMinHeight = false;
                 this.speedDrop = false;
                 Logger.info('BUTTON_PRESS', 'Jump started successfully', {
@@ -522,10 +535,10 @@
         setDuck: function (isDucking) {
             if (isDucking && this.status != Trex.status.DUCKING) {
                 this.update(0, Trex.status.DUCKING);
-                this.ducking = true;
+                // ducking property is synced by state machine - don't set directly
             } else if (this.status == Trex.status.DUCKING) {
                 this.update(0, Trex.status.RUNNING);
-                this.ducking = false;
+                // ducking property is synced by state machine - don't set directly
             }
         },
 
@@ -535,8 +548,7 @@
         reset: function () {
             this.yPos = this.groundYPos;
             this.jumpVelocity = 0;
-            this.jumping = false;
-            this.ducking = false;
+            // jumping and ducking properties are synced by state machine - don't set directly
             this.update(0, Trex.status.RUNNING);
             this.midair = false;
             this.speedDrop = false;

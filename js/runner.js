@@ -494,7 +494,7 @@
                         continue;
                     }
                     // Skip respawning dinos - they have their own animation
-                    if (dino.respawning || dino.status === Trex.status.RESPAWNING) {
+                    if (dino.respawning || dino.status === Trex.status.RESPAWNING_BLINKING || dino.status === Trex.status.RESPAWNING_FALLING) {
                         continue;
                     }
                     if (dino.jumping) {
@@ -535,7 +535,7 @@
                             continue;
                         }
                         // Skip respawning dinos (they're floating above ground)
-                        if (dino.respawning || dino.status === Trex.status.RESPAWNING) {
+                        if (dino.respawning || dino.status === Trex.status.RESPAWNING_BLINKING || dino.status === Trex.status.RESPAWNING_FALLING) {
                             continue;
                         }
                         
@@ -558,7 +558,8 @@
                     var dino = this.tRexes[i];
                     // Only update distance for non-crashed, non-respawning dinos
                     if (!dino.crashed && !dino.respawning && 
-                        dino.status !== Trex.status.RESPAWNING && 
+                        dino.status !== Trex.status.RESPAWNING_BLINKING && 
+                        dino.status !== Trex.status.RESPAWNING_FALLING && 
                         dino.distanceRan !== undefined) {
                         dino.distanceRan += distanceIncrement;
                     }
@@ -1051,8 +1052,8 @@
             dino.distanceRan = 0;
             dino.mac = mac; // Store MAC for reference
             dino.name = name || mac; // Store name if provided
-            dino.crashed = false; // Initialize crashed state
-            // Start dino in running state
+            // State properties (crashed, respawning, jumping, ducking) are managed by state machine
+            // Start dino in running state - state machine will sync all properties
             dino.update(0, Trex.status.RUNNING);
             this.tRexes.push(dino);
             this.playerMap[mac] = dino;
@@ -1115,21 +1116,45 @@
                 });
             }
 
-            // If dino is respawning, trigger fall instead of jump
-            if (dino && (dino.respawning || dino.status === Trex.status.RESPAWNING)) {
-                Logger.info('BUTTON_PRESS', 'Button press during respawn - triggering fall', {
+            // If dino is crashed, transition to RESPAWNING_BLINKING on button press
+            // Use state machine to check crashed state
+            if (dino && dino.stateMachine && dino.stateMachine.isCrashed()) {
+                Logger.info('BUTTON_PRESS', 'Button press while crashed - transitioning to RESPAWNING_BLINKING', {
+                    mac: mac,
+                    status: dino.status,
+                    stateMachineState: dino.stateMachine.getState()
+                });
+                dino.update(0, Trex.status.RESPAWNING_BLINKING);
+                if (this.soundFx && this.soundFx.BUTTON_PRESS) {
+                    this.playSound(this.soundFx.BUTTON_PRESS);
+                }
+                return; // Don't process as jump
+            }
+
+            // If dino is blinking (waiting for fall), transition to falling state
+            // Use state machine to check state
+            if (dino && dino.stateMachine && dino.stateMachine.isState(DinoState.RESPAWNING_BLINKING)) {
+                Logger.info('BUTTON_PRESS', 'Button press during respawn blinking - transitioning to falling', {
                     mac: mac,
                     respawning: dino.respawning,
                     status: dino.status,
-                    respawnFallTriggered: dino.respawnFallTriggered
+                    stateMachineState: dino.stateMachine.getState()
                 });
-                if (!dino.respawnFallTriggered) {
-                    dino.respawnFallTriggered = true;
-                    Logger.info('BUTTON_PRESS', 'Respawn fall triggered');
-                    if (this.soundFx && this.soundFx.BUTTON_PRESS) {
-                        this.playSound(this.soundFx.BUTTON_PRESS);
-                    }
+                dino.update(0, Trex.status.RESPAWNING_FALLING);
+                if (this.soundFx && this.soundFx.BUTTON_PRESS) {
+                    this.playSound(this.soundFx.BUTTON_PRESS);
                 }
+                return; // Don't process as jump during respawn
+            }
+
+            // If dino is falling, ignore button press (already falling)
+            // Use state machine to check state
+            if (dino && dino.stateMachine && dino.stateMachine.isState(DinoState.RESPAWNING_FALLING)) {
+                Logger.debug('BUTTON_PRESS', 'Button press during respawn falling - ignored', {
+                    mac: mac,
+                    status: dino.status,
+                    stateMachineState: dino.stateMachine.getState()
+                });
                 return; // Don't process as jump during respawn
             }
 
@@ -1204,8 +1229,8 @@
                     // Initialize score tracking for this dino
                     dino.distanceRan = 0;
                     dino.mac = mac; // Store MAC for reference
-                    dino.crashed = false; // Initialize crashed state
-                    // Start dino in running state
+                    // State properties (crashed, respawning, jumping, ducking) are managed by state machine
+                    // Start dino in running state - state machine will sync all properties
                     dino.update(0, Trex.status.RUNNING);
                     this.tRexes.push(dino);
                     this.playerMap[mac] = dino;
@@ -1489,7 +1514,7 @@
                 // Reset all dinos (including crashed state for competitive mode)
                 for (var i = 0; i < this.tRexes.length; i++) {
                     var dino = this.tRexes[i];
-                    dino.crashed = false;
+                    // State properties are managed by state machine - transition to WAITING will reset them
                     // Reset xPos to original position
                     if (dino.originalXPos !== undefined) {
                         dino.xPos = dino.originalXPos;
@@ -1647,12 +1672,13 @@
          * @param {Object} dino The crashed dino
          */
         handleDinoCrash: function (dino) {
-            if (dino.crashed) {
+            // Check if already crashed using state machine
+            if (dino.stateMachine && dino.stateMachine.isCrashed()) {
                 return; // Already crashed
             }
             
             this.playSound(this.soundFx.HIT);
-            dino.crashed = true;
+            // Transition to CRASHED state - state machine will sync crashed property
             dino.update(100, Trex.status.CRASHED);
             
             // Reset counter and respawn after a delay
@@ -1667,26 +1693,22 @@
          * @param {Object} dino The dino to respawn
          */
         respawnDino: function (dino) {
-            dino.crashed = false;
             dino.distanceRan = 0; // Reset counter to 0
             // Reset xPos to original position
             if (dino.originalXPos !== undefined) {
                 dino.xPos = dino.originalXPos;
             }
-            // Reset dino state but don't set to running yet - start respawn animation
+            // Reset dino animation properties
             dino.yPos = dino.groundYPos;
             dino.jumpVelocity = 0;
-            dino.jumping = false;
-            dino.ducking = false;
             dino.speedDrop = false;
             dino.jumpCount = 0;
-            // Start respawn animation: float, keep blinking until button press, then fall
-            dino.respawning = true;
-            dino.respawnStartTime = 0; // Will be set in updateRespawnAnimation
+            // Reset respawn animation state
+            dino.respawnStartTime = 0; // Will be set in updateRespawnBlinking
             dino.respawnBlinkCount = 0;
             dino.lastBlinkFrame = 0;
-            dino.respawnFallTriggered = false; // Reset fall trigger
-            dino.update(0, Trex.status.RESPAWNING);
+            // Transition to RESPAWNING_BLINKING state - state machine will sync crashed, respawning, jumping, ducking properties
+            dino.update(0, Trex.status.RESPAWNING_BLINKING);
         },
 
         /**

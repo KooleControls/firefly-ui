@@ -83,12 +83,14 @@
                     return GameState[key] === normalizedState;
                 });
                 if (!stateKey) {
-                    // Note: Logger might not be available when state machine loads
-                    if (window.Logger) {
-                        window.Logger.warn('GAME_STATE_MACHINE', 'Unknown state: ' + newState);
-                    } else {
-                        console.warn('Unknown state: ' + newState);
-                    }
+                    // Always log invalid state attempts regardless of logger config
+                    console.warn('[GAME_STATE_MACHINE] INVALID STATE ATTEMPT:', {
+                        requestedState: newState,
+                        currentState: this.currentState,
+                        availableStates: Object.keys(GameState),
+                        timestamp: new Date().toISOString(),
+                        stackTrace: new Error().stack
+                    });
                     return false;
                 }
             } else {

@@ -15,7 +15,8 @@
         JUMPING: 'JUMPING',
         DUCKING: 'DUCKING',
         CRASHED: 'CRASHED',
-        RESPAWNING: 'RESPAWNING'
+        RESPAWNING_BLINKING: 'RESPAWNING_BLINKING',
+        RESPAWNING_FALLING: 'RESPAWNING_FALLING'
     };
 
     /**
@@ -163,16 +164,49 @@
             });
 
             if (!isValid) {
-                Logger.warn('DINO_STATE_MACHINE', 'Invalid state transition from ' + this.currentState + ' to ' + normalizedState);
+                // Always log invalid transitions regardless of logger config - this is important for debugging
+                console.warn('[DINO_STATE_MACHINE] INVALID TRANSITION ATTEMPT:', {
+                    from: this.currentState,
+                    to: normalizedState,
+                    gameMode: this.gameMode,
+                    crashed: this.crashed,
+                    respawning: this.respawning,
+                    canRespawn: this.canRespawn,
+                    timestamp: new Date().toISOString(),
+                    stackTrace: new Error().stack
+                });
                 return false;
             }
 
             var oldState = this.currentState;
             
-            // Only transition if state is different
+            // Allow self-transitions (same state) - they will update history and notify listeners
+            // This is useful for re-triggering state logic or ensuring state consistency
             if (oldState === normalizedState) {
-                Logger.debug('DINO_STATE_MACHINE', 'State unchanged, skipping transition: ' + normalizedState);
-                return false;
+                Logger.debug('DINO_STATE_MACHINE', 'Self-transition: ' + normalizedState);
+                // Still update history and notify listeners for self-transitions
+                this.stateHistory.push({
+                    from: oldState,
+                    to: normalizedState,
+                    timestamp: Date.now(),
+                    gameMode: this.gameMode,
+                    data: data,
+                    selfTransition: true
+                });
+
+                // Limit history size
+                if (this.stateHistory.length > this.maxHistorySize) {
+                    this.stateHistory.shift();
+                }
+
+                // Notify listeners even for self-transitions
+                this.notifyListeners(oldState, normalizedState, data);
+
+                // Sync dino status to ensure consistency
+                this.syncDinoStatusFromState(normalizedState);
+
+                Logger.debug('DINO_STATE_MACHINE', 'Self-transition complete. Current state: ' + this.currentState);
+                return true;
             }
 
             // Update state
@@ -185,17 +219,26 @@
                 gameMode: this.gameMode
             });
 
-            // Update crashed flag
+            // Update crashed and respawning flags based on state
+            // These flags are the source of truth and will be synced to dino properties
             if (normalizedState === DinoState.CRASHED) {
                 this.crashed = true;
+                this.respawning = false; // Clear respawning if crashing
                 Logger.info('DINO_STATE_MACHINE', 'Dino crashed flag set to true');
-            } else if (normalizedState === DinoState.RESPAWNING) {
+            } else if (normalizedState === DinoState.RESPAWNING_BLINKING || normalizedState === DinoState.RESPAWNING_FALLING) {
                 this.respawning = true;
                 this.crashed = false; // Reset crashed when respawning
                 Logger.info('DINO_STATE_MACHINE', 'Dino respawning, crashed flag reset');
             } else if (normalizedState === DinoState.RUNNING && this.respawning) {
                 this.respawning = false; // Finished respawning
                 Logger.info('DINO_STATE_MACHINE', 'Dino finished respawning');
+            } else if (normalizedState !== DinoState.RESPAWNING_BLINKING && normalizedState !== DinoState.RESPAWNING_FALLING && normalizedState !== DinoState.CRASHED) {
+                // Clear respawning flag for any other state (except RESPAWNING states and CRASHED)
+                // This ensures respawning is only true when actually in RESPAWNING state
+                if (this.respawning) {
+                    this.respawning = false;
+                    Logger.debug('DINO_STATE_MACHINE', 'Cleared respawning flag for state: ' + normalizedState);
+                }
             }
 
             // Add to history
@@ -215,24 +258,8 @@
             // Notify listeners
             this.notifyListeners(oldState, normalizedState, data);
 
-            // Update the dino's status to match
-            if (this.dino && this.dino.update) {
-                // Sync with Trex.status enum
-                var trexStatus = this.getTrexStatusForState(normalizedState);
-                Logger.debug('DINO_STATE_MACHINE', 'Syncing dino status', {
-                    dinoState: normalizedState,
-                    trexStatus: trexStatus,
-                    hasDino: !!this.dino,
-                    hasUpdate: !!this.dino.update
-                });
-                if (trexStatus) {
-                    this.dino.update(0, trexStatus);
-                } else {
-                    Logger.warn('DINO_STATE_MACHINE', 'No Trex.status found for: ' + normalizedState);
-                }
-            } else {
-                Logger.warn('DINO_STATE_MACHINE', 'Dino instance or update method not available');
-            }
+            // Sync the dino's legacy status from state machine (source of truth)
+            this.syncDinoStatusFromState(normalizedState);
 
             Logger.debug('DINO_STATE_MACHINE', 'Transition complete. Current state: ' + this.currentState);
             return true;
@@ -253,6 +280,12 @@
                 canRespawn: this.canRespawn
             });
 
+            // Always allow self-transitions (transitioning to the same state)
+            if (this.currentState === newState) {
+                Logger.debug('DINO_STATE_MACHINE', 'Self-transition allowed: ' + newState);
+                return true;
+            }
+
             // In collective mode, crashed dinos can't transition to other states
             if (this.gameMode === GameMode.COLLECTIVE && this.isCrashed() && 
                 newState !== DinoState.CRASHED) {
@@ -262,7 +295,7 @@
 
             // In competitive mode, crashed dinos can respawn
             if (this.gameMode === GameMode.COMPETITIVE && this.isCrashed() && 
-                newState === DinoState.RESPAWNING && this.canRespawn) {
+                newState === DinoState.RESPAWNING_BLINKING && this.canRespawn) {
                 Logger.debug('DINO_STATE_MACHINE', 'Valid: Competitive mode - crashed dino can respawn');
                 return true;
             }
@@ -271,24 +304,32 @@
             var isValid = false;
             switch(this.currentState) {
                 case DinoState.CRASHED:
-                    // Can only transition to RESPAWNING (competitive) or stay CRASHED
-                    isValid = newState === DinoState.RESPAWNING || newState === DinoState.CRASHED;
+                    // Can only transition to RESPAWNING_BLINKING (competitive) or stay CRASHED
+                    isValid = newState === DinoState.RESPAWNING_BLINKING || newState === DinoState.CRASHED;
                     Logger.debug('DINO_STATE_MACHINE', 'CRASHED state transition check', {
                         newState: newState,
                         isValid: isValid,
                         canRespawn: this.canRespawn
                     });
                     break;
-                case DinoState.RESPAWNING:
-                    // Can transition to RUNNING when respawn completes
-                    isValid = newState === DinoState.RUNNING || newState === DinoState.RESPAWNING;
-                    Logger.debug('DINO_STATE_MACHINE', 'RESPAWNING state transition check', {
+                case DinoState.RESPAWNING_BLINKING:
+                    // Can transition to RESPAWNING_FALLING when button pressed, or stay blinking
+                    isValid = newState === DinoState.RESPAWNING_FALLING || newState === DinoState.RESPAWNING_BLINKING;
+                    Logger.debug('DINO_STATE_MACHINE', 'RESPAWNING_BLINKING state transition check', {
+                        newState: newState,
+                        isValid: isValid
+                    });
+                    break;
+                case DinoState.RESPAWNING_FALLING:
+                    // Can transition to RUNNING when respawn completes, or stay falling
+                    isValid = newState === DinoState.RUNNING || newState === DinoState.RESPAWNING_FALLING;
+                    Logger.debug('DINO_STATE_MACHINE', 'RESPAWNING_FALLING state transition check', {
                         newState: newState,
                         isValid: isValid
                     });
                     break;
                 case DinoState.WAITING:
-                    // Can transition to RUNNING or JUMPING
+                    // Can transition to RUNNING, JUMPING, or stay WAITING
                     isValid = [DinoState.RUNNING, DinoState.JUMPING, DinoState.WAITING].indexOf(newState) !== -1;
                     Logger.debug('DINO_STATE_MACHINE', 'WAITING state transition check', {
                         newState: newState,
@@ -340,6 +381,75 @@
                 return window.Trex.status[state] || null;
             }
             return state;
+        },
+
+        /**
+         * Sync the dino's legacy status property and all state-related properties from the state machine
+         * This ensures the state machine is the source of truth for all state-related properties
+         * @param {string} dinoState The current dino state
+         */
+        syncDinoStatusFromState: function(dinoState) {
+            if (!this.dino) {
+                Logger.warn('DINO_STATE_MACHINE', 'Cannot sync status - no dino instance');
+                return;
+            }
+
+            // Get the corresponding Trex.status enum value
+            var trexStatus = this.getTrexStatusForState(dinoState);
+            
+            if (!trexStatus) {
+                Logger.warn('DINO_STATE_MACHINE', 'No Trex.status found for state: ' + dinoState);
+                return;
+            }
+
+            Logger.debug('DINO_STATE_MACHINE', 'Syncing dino properties from state machine', {
+                dinoState: dinoState,
+                trexStatus: trexStatus,
+                currentDinoStatus: this.dino.status,
+                stateMachineCrashed: this.crashed,
+                stateMachineRespawning: this.respawning
+            });
+
+            // Sync legacy status property and animation frames
+            this.dino.status = trexStatus;
+            this.dino.currentFrame = 0;
+            
+            // Update animation frames if available
+            if (window.Trex && window.Trex.animFrames && window.Trex.animFrames[trexStatus]) {
+                this.dino.msPerFrame = window.Trex.animFrames[trexStatus].msPerFrame;
+                this.dino.currentAnimFrames = window.Trex.animFrames[trexStatus].frames;
+            }
+
+            // Sync state-related properties from state machine (source of truth)
+            // These should never be set directly on dino - always go through state machine
+            this.dino.crashed = this.crashed;
+            this.dino.respawning = this.respawning;
+            
+            // Sync jumping/ducking based on current state
+            this.dino.jumping = (dinoState === DinoState.JUMPING);
+            this.dino.ducking = (dinoState === DinoState.DUCKING);
+
+            // Handle special status initialization
+            if (trexStatus === window.Trex.status.WAITING) {
+                if (this.dino.animStartTime !== undefined) {
+                    // Use global getTimeStamp function if available, otherwise fallback to Date.now()
+                    var timeStampFn = (typeof getTimeStamp !== 'undefined') ? getTimeStamp : 
+                                     (window.getTimeStamp ? window.getTimeStamp : null);
+                    this.dino.animStartTime = timeStampFn ? timeStampFn() : Date.now();
+                }
+                if (this.dino.setBlinkDelay) {
+                    this.dino.setBlinkDelay();
+                }
+            }
+
+            Logger.debug('DINO_STATE_MACHINE', 'Dino properties synced', {
+                newStatus: this.dino.status,
+                crashed: this.dino.crashed,
+                respawning: this.dino.respawning,
+                jumping: this.dino.jumping,
+                ducking: this.dino.ducking,
+                stateMachineState: this.currentState
+            });
         },
 
         /**
