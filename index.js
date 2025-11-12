@@ -110,7 +110,7 @@
      */
     Runner.config = {
         ACCELERATION: 0.001,
-        ENABLE_SPEED_ACCELERATION: true, // Set to false to disable speed increase over time
+        ENABLE_SPEED_ACCELERATION: false,
         BG_CLOUD_SPEED: 0.2,
         BOTTOM_PAD: 10,
         CLEAR_TIME: 3000,
@@ -129,7 +129,7 @@
         MIN_JUMP_HEIGHT: 35,
         MOBILE_SPEED_COEFFICIENT: 1.2,
         RESOURCE_TEMPLATE_ID: 'audio-resources',
-        SPEED: 6,
+        SPEED: 4,
         SPEED_DROP_COEFFICIENT: 3,
         ARCADE_MODE_INITIAL_TOP_POSITION: 35,
         ARCADE_MODE_TOP_POSITION_PERCENT: 0.1
