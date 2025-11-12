@@ -432,6 +432,10 @@
                     if (this.gameMode === 'competitive' && dino.crashed) {
                         continue;
                     }
+                    // Skip respawning dinos - they have their own animation
+                    if (dino.respawning || dino.status === Trex.status.RESPAWNING) {
+                        continue;
+                    }
                     if (dino.jumping) {
                         dino.updateJump(deltaTime);
                     }
@@ -469,6 +473,10 @@
                         if (this.gameMode === 'competitive' && dino.crashed) {
                             continue;
                         }
+                        // Skip respawning dinos (they're floating above ground)
+                        if (dino.respawning || dino.status === Trex.status.RESPAWNING) {
+                            continue;
+                        }
                         
                         if (checkForCollision(this.horizon.obstacles[0], dino)) {
                             if (this.gameMode === 'collective') {
@@ -487,8 +495,10 @@
                 var distanceIncrement = this.currentSpeed * deltaTime / this.msPerFrame;
                 for (var i = 0; i < this.tRexes.length; i++) {
                     var dino = this.tRexes[i];
-                    // Only update distance for non-crashed dinos
-                    if (!dino.crashed && dino.distanceRan !== undefined) {
+                    // Only update distance for non-crashed, non-respawning dinos
+                    if (!dino.crashed && !dino.respawning && 
+                        dino.status !== Trex.status.RESPAWNING && 
+                        dino.distanceRan !== undefined) {
                         dino.distanceRan += distanceIncrement;
                     }
                 }
@@ -922,6 +932,17 @@
                 dino = this.playerMap[mac];
             }
 
+            // If dino is respawning, trigger fall instead of jump
+            if (dino && (dino.respawning || dino.status === Trex.status.RESPAWNING)) {
+                if (!dino.respawnFallTriggered) {
+                    dino.respawnFallTriggered = true;
+                    if (this.soundFx && this.soundFx.BUTTON_PRESS) {
+                        this.playSound(this.soundFx.BUTTON_PRESS);
+                    }
+                }
+                return; // Don't process as jump during respawn
+            }
+
             // Trigger jump if not already jumping or ducking
             if (dino && !dino.jumping && !dino.ducking) {
                 if (this.soundFx && this.soundFx.BUTTON_PRESS) {
@@ -1347,8 +1368,20 @@
             if (dino.originalXPos !== undefined) {
                 dino.xPos = dino.originalXPos;
             }
-            dino.reset();
-            dino.update(0, Trex.status.RUNNING);
+            // Reset dino state but don't set to running yet - start respawn animation
+            dino.yPos = dino.groundYPos;
+            dino.jumpVelocity = 0;
+            dino.jumping = false;
+            dino.ducking = false;
+            dino.speedDrop = false;
+            dino.jumpCount = 0;
+            // Start respawn animation: float, keep blinking until button press, then fall
+            dino.respawning = true;
+            dino.respawnStartTime = 0; // Will be set in updateRespawnAnimation
+            dino.respawnBlinkCount = 0;
+            dino.lastBlinkFrame = 0;
+            dino.respawnFallTriggered = false; // Reset fall trigger
+            dino.update(0, Trex.status.RESPAWNING);
         },
 
         /**

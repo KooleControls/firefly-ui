@@ -39,6 +39,13 @@
         this.jumpCount = 0;
         this.jumpspotX = 0;
 
+        // Respawn animation state
+        this.respawning = false;
+        this.respawnBlinkCount = 0;
+        this.respawnStartTime = 0;
+        this.respawnBlinkDelay = 200; // Time between blinks in ms
+        this.respawnFallTriggered = false; // Whether button was pressed to trigger fall
+
         this.init();
     }
 
@@ -89,7 +96,8 @@
         DUCKING: 'DUCKING',
         JUMPING: 'JUMPING',
         RUNNING: 'RUNNING',
-        WAITING: 'WAITING'
+        WAITING: 'WAITING',
+        RESPAWNING: 'RESPAWNING'
     };
 
     /**
@@ -122,6 +130,10 @@
         DUCKING: {
             frames: [264, 323],
             msPerFrame: 1000 / 8
+        },
+        RESPAWNING: {
+            frames: [44, 0], // Same as WAITING for blinking effect
+            msPerFrame: 1000 / 3
         }
     };
 
@@ -176,14 +188,17 @@
                     this.config.INTRO_DURATION) * deltaTime);
             }
 
-            if (this.status == Trex.status.WAITING) {
+            // Handle respawn animation
+            if (this.status == Trex.status.RESPAWNING) {
+                this.updateRespawnAnimation(deltaTime);
+            } else if (this.status == Trex.status.WAITING) {
                 this.blink(getTimeStamp());
             } else {
                 this.draw(this.currentAnimFrames[this.currentFrame], 0);
             }
 
-            // Update the frame position.
-            if (this.timer >= this.msPerFrame) {
+            // Update the frame position (skip for respawning - handled in updateRespawnAnimation)
+            if (this.status != Trex.status.RESPAWNING && this.timer >= this.msPerFrame) {
                 this.currentFrame = this.currentFrame ==
                     this.currentAnimFrames.length - 1 ? 0 : this.currentFrame + 1;
                 this.timer = 0;
@@ -260,6 +275,84 @@
                     this.setBlinkDelay();
                     this.animStartTime = time;
                     this.blinkCount++;
+                }
+            }
+        },
+
+        /**
+         * Update respawn animation: float above ground, blink 4 times, then fall.
+         * @param {number} deltaTime
+         */
+        updateRespawnAnimation: function (deltaTime) {
+            var currentTime = getTimeStamp();
+            
+            // Initialize respawn start time if not set
+            if (this.respawnStartTime === 0) {
+                this.respawnStartTime = currentTime;
+                this.respawnBlinkCount = 0;
+                this.lastBlinkFrame = 0; // Track last frame to detect blink completion
+                this.respawnFallTriggered = false; // Reset fall trigger
+                // Position dino above ground (float height)
+                var floatHeight = 50; // Pixels above ground
+                this.yPos = this.groundYPos - floatHeight;
+                this.jumpVelocity = 0; // Keep it floating
+            }
+
+            var elapsedTime = currentTime - this.respawnStartTime;
+            var blinkInterval = this.respawnBlinkDelay * 2; // Time for one complete blink (open + close)
+
+            // Keep blinking until button is pressed to trigger fall
+            if (!this.respawnFallTriggered) {
+                // Calculate which frame of the blink we're on
+                var blinkCycle = Math.floor((elapsedTime % blinkInterval) / this.respawnBlinkDelay);
+                this.currentFrame = blinkCycle;
+                
+                // Update blink count based on elapsed time
+                var newBlinkCount = Math.floor(elapsedTime / blinkInterval);
+                if (newBlinkCount > this.respawnBlinkCount) {
+                    this.respawnBlinkCount = newBlinkCount;
+                }
+                
+                // Draw the blinking dino
+                this.draw(this.currentAnimFrames[this.currentFrame], 0);
+            } else {
+                // Button was pressed, start falling
+                // Ensure we're above ground (safety check)
+                if (this.yPos >= this.groundYPos) {
+                    // Already on ground, switch to running
+                    this.yPos = this.groundYPos;
+                    this.respawning = false;
+                    this.respawnStartTime = 0;
+                    this.respawnBlinkCount = 0;
+                    this.lastBlinkFrame = 0;
+                    this.jumpVelocity = 0;
+                    this.update(0, Trex.status.RUNNING);
+                } else {
+                    // Apply gravity to make it fall (use same approach as updateJump)
+                    // Use standard 60fps for physics calculations (not animation frame rate)
+                    var msPerFrame = 1000 / 60; // ~16.67ms per frame at 60fps
+                    var framesElapsed = deltaTime / msPerFrame;
+                    
+                    // Update position first (like updateJump does)
+                    this.yPos += Math.round(this.jumpVelocity * framesElapsed);
+                    
+                    // Then apply gravity
+                    this.jumpVelocity += this.config.GRAVITY * framesElapsed;
+                    
+                    // Draw the dino while falling
+                    this.draw(this.currentAnimFrames[0], 0);
+                    
+                    // Check if reached ground
+                    if (this.yPos >= this.groundYPos) {
+                        this.yPos = this.groundYPos;
+                        // Switch to running state
+                        this.respawning = false;
+                        this.respawnStartTime = 0;
+                        this.respawnBlinkCount = 0;
+                        this.lastBlinkFrame = 0;
+                        this.jumpVelocity = 0;
+                        this.update(0, Trex.status.RUNNING);
+                    }
                 }
             }
         },
