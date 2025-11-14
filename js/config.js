@@ -134,9 +134,9 @@
             TEXT_SPRITE: { x: 1294, y: 2 },
             TREX: { x: 1678, y: 2 },
             STAR: { x: 1276, y: 2 },
-            KCSIGN: { x: 1235, y: 2 },
-            KCBAR: { x: 1278, y: 13 },
-            KCLOCK: { x: 1330, y: 2 }
+            KCSIGN: { x: 1235*2, y: 2 },
+            KCBAR: { x: 1278*2, y: 13 },
+            KCLOCK: { x: 1330*2, y: 2 }
         }
     };
 

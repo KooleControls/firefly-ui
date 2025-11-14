@@ -110,8 +110,8 @@
         },
         {
             type: 'KCSIGN',
-            width: 36,
-            height: 60,
+            width: 36*2,
+            height: 60*2,
             yPos: 90,
             multipleSpeed: 7,
             minGap: 120,
@@ -124,8 +124,8 @@
         },
         {
             type: 'KCBAR',
-            width: 47,
-            height: 42,
+            width: 47*2,
+            height: 42*2,
             yPos: 100,
             multipleSpeed: 7,
             minGap: 120,
@@ -138,8 +138,8 @@
         },
         {
             type: 'KCLOCK',
-            width: 39,
-            height: 57,
+            width: 39*2,
+            height: 57*2,
             yPos: 90,
             multipleSpeed: 7,
             minGap: 120,
